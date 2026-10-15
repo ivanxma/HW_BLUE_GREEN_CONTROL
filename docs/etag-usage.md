@@ -1,6 +1,6 @@
 # OCI MySQL DB-system updates: ETag usage and removal
 
-Updated 15 October 2026 · [Project overview](../README.md) · [Technical guide](../docs/technical-guide.md)
+Updated 15 October 2026 · [Project overview](../README.md) · [Technical guide](technical-guide.md)
 
 The application now uses **Standard OCI requests for every operation**. ETag execution, conditional retries and the UI mode selector have been removed. This document preserves the former behavior and reproduction examples; the examples are not application execution paths.
 
