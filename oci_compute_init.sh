@@ -3,7 +3,8 @@
 set -euo pipefail
 APP_REPO="${APP_REPO:-https://github.com/ivanxma/HW_BLUE_GREEN_CONTROL.git}"
 OS_FAMILY="${OS_FAMILY:-ol9}"
-case "$OS_FAMILY" in ol8|ol9) default_user=opc;; ubuntu) default_user=ubuntu;; *) exit 2;; esac
+[[ "$OS_FAMILY" == ol9 ]] || { echo "Compute deployment requires Oracle Linux 9" >&2; exit 2; }
+default_user=opc
 APP_USER="${APP_USER:-$default_user}"
 APP_DIR="${APP_DIR:-/home/$APP_USER/heatwave-console}"
 APP_SUBDIR="${APP_SUBDIR:-.}"
@@ -23,8 +24,7 @@ elif [[ -f "$STATE_DIR/failed" ]]; then echo 'Installation failed. Review $LOG_F
 BANNER
 chmod 755 /etc/profile.d/heatwave-bluegreen.sh
 if ! command -v git >/dev/null; then
- if [[ "$OS_FAMILY" == ubuntu ]]; then apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y git
- else dnf install -y git; fi
+ dnf install -y git
 fi
 if [[ -d "$APP_DIR/.git" ]]; then
  sudo -u "$APP_USER" git -C "$APP_DIR" fetch --all --prune
@@ -33,6 +33,6 @@ else
  if [[ -e "$APP_DIR" ]]; then mv "$APP_DIR" "$APP_DIR.$(date +%Y%m%d%H%M%S)"; fi
  sudo -u "$APP_USER" git clone "$APP_REPO" "$APP_DIR"
 fi
-sudo -u "$APP_USER" bash "$APP_DIR/$APP_SUBDIR/setup.sh" --platform "$OS_FAMILY" --mode https --host 0.0.0.0 --port 5443 --service-user "$APP_USER"
+sudo -u "$APP_USER" bash "$APP_DIR/$APP_SUBDIR/setup.sh" --platform "$OS_FAMILY" --mode https --host 0.0.0.0 --port 443 --service-user "$APP_USER"
 systemctl --no-pager status heatwave-bluegreen-https.service || true
 echo "First web login must change the initial admin password before any operation."

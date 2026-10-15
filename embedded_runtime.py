@@ -155,7 +155,7 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
     parser.add_argument('action',choices=['provision','start','stop','wait','install-shell','discover'])
-    parser.add_argument('--platform',choices=['ol8','ol9','ubuntu','macos'],default='macos' if os.uname().sysname=='Darwin' else 'ol9')
+    parser.add_argument('--platform',choices=['ol9','macos'],default='macos' if os.uname().sysname=='Darwin' else 'ol9')
     args=parser.parse_args()
     if args.action=='provision':provision(args.platform)
     elif args.action=='start':start()

@@ -12,25 +12,25 @@ while [[ $# -gt 0 ]]; do
     --service-user) service_user="$2"; shift 2;;
     --read-only) setup_read_only=1; shift;;
     --execute-oci) setup_read_only=0; shift;;
-    *) echo "Usage: setup.sh [--platform ol8|ol9|ubuntu|macos] [--mode none|http|https] [--host HOST] [--port PORT] [--service-user USER] [--read-only|--execute-oci]" >&2; exit 2;;
+    *) echo "Usage: setup.sh [--platform ol9|macos] [--mode none|http|https] [--host HOST] [--port PORT] [--service-user USER] [--read-only|--execute-oci]" >&2; exit 2;;
   esac
 done
 if [[ -z "$platform" ]]; then
   if [[ "$(uname)" == Darwin ]]; then platform=macos
   elif [[ -f /etc/os-release ]]; then
     source /etc/os-release
-    case "$ID" in ol) platform="ol${VERSION_ID%%.*}";; ubuntu) platform=ubuntu;; *) echo 'Specify a supported platform' >&2; exit 2;; esac
+    case "$ID" in ol) platform="ol${VERSION_ID%%.*}";; *) echo 'Specify a supported platform' >&2; exit 2;; esac
   fi
 fi
 if [[ -z "$setup_host" ]]; then [[ "$mode" == none ]] && setup_host=127.0.0.1 || setup_host=0.0.0.0; fi
 if [[ -z "$setup_port" ]]; then
   case "$mode" in https) setup_port=443;; http) setup_port=8080;; *) setup_port=5000;; esac
 fi
-[[ "$platform" =~ ^(ol8|ol9|ubuntu|macos)$ ]] || { echo 'Unsupported platform' >&2; exit 2; }
+[[ "$platform" =~ ^(ol9|macos)$ ]] || { echo 'Supported platforms: Oracle Linux 9 (deployment), macOS (local development)' >&2; exit 2; }
 [[ "$mode" =~ ^(none|http|https)$ ]] || { echo 'Unsupported mode' >&2; exit 2; }
 [[ "$setup_port" =~ ^[0-9]+$ ]] && ((setup_port > 0 && setup_port < 65536)) || { echo 'Invalid port' >&2; exit 2; }
 [[ "$service_user" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid service user' >&2; exit 2; }
-[[ "$service_user" == "$(id -un)" && "$service_user" != root ]] || { echo 'Run setup as the runtime user (opc or ubuntu on Compute), using sudo only for platform prerequisites.' >&2; exit 2; }
+[[ "$service_user" == "$(id -un)" && "$service_user" != root ]] || { echo 'Run setup as the runtime user (opc on Oracle Linux 9 Compute), using sudo only for platform prerequisites.' >&2; exit 2; }
 source "$platform/setup_platform.sh"
 python_bin="${BLUEGREEN_PYTHON_BIN:-$(command -v python3.12 || command -v python3 || true)}"
 minimum="${BLUEGREEN_PYTHON_MIN_VERSION:-3.12}"
