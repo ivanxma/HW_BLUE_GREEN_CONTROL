@@ -1,0 +1,8 @@
+[project]
+name = "heatwave-bluegreen"
+version = "1.1.0"
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

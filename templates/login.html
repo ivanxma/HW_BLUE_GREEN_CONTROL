@@ -1,0 +1,10 @@
+{% extends 'base.html' %}{% block content %}
+<main class="auth-cover"><div class="brandmark">HW</div><p class="eyebrow">HEATWAVE OPERATIONS</p><h1>Blue Green Control Room</h1><p class="muted">Prepare, observe and promote your next environment.</p></main>
+<dialog open id="auth-dialog" class="auth-popup" aria-labelledby="login-title">
+<div class="brandmark">HW</div><p class="eyebrow">LOCAL ADMIN</p><h2 id="login-title">Sign in</h2>
+{% if demo %}<p class="notice">Read-only OCI demo. Admin login uses the embedded database.</p>{% endif %}
+{% if request.args.get('changed') %}<p class="alert green">Password changed. Sign in with your new password.</p>{% endif %}
+{% if error %}<p class="alert red" role="alert">{{ error }}</p>{% endif %}
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Admin username *<input name="username" value="admin" autocomplete="username" required></label><label>Password *<input type="password" name="password" autocomplete="current-password" required autofocus></label><button class="primary">Sign in</button></form>
+<p class="muted small">A password change is required before first use.</p></dialog><script src="{{ url_for('static',filename='auth.js') }}" defer></script>
+{% endblock %}
