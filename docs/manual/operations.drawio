@@ -1,0 +1,162 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" type="device">
+  <diagram id="workflow" name="From Blue to a verified Green primary">
+    <mxGraphModel page="1" pageWidth="1100" pageHeight="510" grid="1" gridSize="10">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="From Blue to a verified Green primary" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=28;fontColor=#312D2A;fontStyle=1;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="25" width="1040" height="36" />
+        </mxCell>
+        <mxCell id="subtitle" value="Operator workflow • Each operation presents its changes for confirmation." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=17;fontColor=#312D2A;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="66" width="1040" height="34" />
+        </mxCell>
+        <mxCell id="select" value="&lt;b&gt;1  Select Blue&lt;/b&gt;&lt;br&gt;&lt;br&gt;Choose compartment and source.&lt;br&gt;Register SQL access and secrets." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#315f93;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="120" width="322" height="128" />
+        </mxCell>
+        <mxCell id="review" value="&lt;b&gt;2  Review creation&lt;/b&gt;&lt;br&gt;&lt;br&gt;Choose target and HA options.&lt;br&gt;Record source event states." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#315f93;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="389" y="120" width="322" height="128" />
+        </mxCell>
+        <mxCell id="create" value="&lt;b&gt;3  Create Green&lt;/b&gt;&lt;br&gt;&lt;br&gt;Disable Blue HA if required.&lt;br&gt;Create Green read-only." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="120" width="322" height="128" />
+        </mxCell>
+        <mxCell id="verify" value="&lt;b&gt;6  Verify completion&lt;/b&gt;&lt;br&gt;&lt;br&gt;Check endpoint, GTIDs and RW.&lt;br&gt;Finish HA, channels and events." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="306" width="322" height="128" />
+        </mxCell>
+        <mxCell id="promote" value="&lt;b&gt;5  Precheck and promote&lt;/b&gt;&lt;br&gt;&lt;br&gt;Keep Green standalone.&lt;br&gt;Review events and switchover." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#315f93;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="389" y="306" width="322" height="128" />
+        </mxCell>
+        <mxCell id="prepare" value="&lt;b&gt;4  Prepare and observe&lt;/b&gt;&lt;br&gt;&lt;br&gt;Restore source events / HA.&lt;br&gt;Review changes on Green." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="306" width="322" height="128" />
+        </mxCell>
+        <mxCell id="select-review" edge="1" source="select" target="review" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="review-create" edge="1" source="review" target="create" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="create-prepare" edge="1" source="create" target="prepare" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="prepare-promote" edge="1" source="prepare" target="promote" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=0;exitY=0.5;entryX=1;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="promote-verify" edge="1" source="promote" target="verify" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=0;exitY=0.5;entryX=1;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="note" value="At any failure: inspect the journal and actual OCI state before another action." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=18;fontColor=#9c4821;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="466" width="1040" height="26" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="events" name="Scheduled events: state belongs to the operator">
+    <mxGraphModel page="1" pageWidth="1100" pageHeight="630" grid="1" gridSize="10">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Scheduled events: state belongs to the operator" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=28;fontColor=#312D2A;fontStyle=1;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="25" width="1040" height="36" />
+        </mxCell>
+        <mxCell id="subtitle" value="Snapshots preserve original states. Final Green states are reviewed before switchover." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=17;fontColor=#312D2A;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="66" width="1040" height="34" />
+        </mxCell>
+        <mxCell id="lane1" value="CREATION · SOURCE" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=18;fontColor=#315f93;fontStyle=1;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="110" width="1040" height="30" />
+        </mxCell>
+        <mxCell id="original" value="&lt;b&gt;Original state&lt;/b&gt;&lt;br&gt;&lt;br&gt;Record each event as found.&lt;br&gt;Example: daily_rollup ENABLED" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#315f93;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="151" width="322" height="128" />
+        </mxCell>
+        <mxCell id="temporary" value="&lt;b&gt;Temporary state&lt;/b&gt;&lt;br&gt;&lt;br&gt;Disable selected enabled events.&lt;br&gt;Already disabled events stay so." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#fffaf3;strokeColor=#9c4821;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="389" y="151" width="322" height="128" />
+        </mxCell>
+        <mxCell id="restored" value="&lt;b&gt;Successful creation&lt;/b&gt;&lt;br&gt;&lt;br&gt;Restore original source states.&lt;br&gt;daily_rollup returns to ENABLED" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#315f93;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="151" width="322" height="128" />
+        </mxCell>
+        <mxCell id="original-temporary" edge="1" source="original" target="temporary" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="temporary-restored" edge="1" source="temporary" target="restored" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="lane2" value="SWITCHOVER · GREEN" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=18;fontColor=#287a50;fontStyle=1;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="317" width="1040" height="30" />
+        </mxCell>
+        <mxCell id="ready" value="&lt;b&gt;Before precheck&lt;/b&gt;&lt;br&gt;&lt;br&gt;Disable enabled Green events.&lt;br&gt;Review the current inventory." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="358" width="322" height="128" />
+        </mxCell>
+        <mxCell id="choices" value="&lt;b&gt;Operator choices&lt;/b&gt;&lt;br&gt;&lt;br&gt;Select Enabled / Disabled / Keep.&lt;br&gt;Defaults use source snapshots." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="389" y="358" width="322" height="128" />
+        </mxCell>
+        <mxCell id="final" value="&lt;b&gt;After promotion&lt;/b&gt;&lt;br&gt;&lt;br&gt;Apply reviewed Green states&lt;br&gt;after requested post-processing." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="358" width="322" height="128" />
+        </mxCell>
+        <mxCell id="ready-choices" edge="1" source="ready" target="choices" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="choices-final" edge="1" source="choices" target="final" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="source-note" value="Source events selected for disable remain disabled on retired Blue." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=18;fontColor=#312D2A;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="523" width="1040" height="28" />
+        </mxCell>
+        <mxCell id="failure" value="If a workflow fails: review both servers; automatic restoration may not have run." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=18;fontColor=#9c4821;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="565" width="1040" height="28" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="switchover" name="Switchover: handoff and follow-up are separate stages">
+    <mxGraphModel page="1" pageWidth="1100" pageHeight="540" grid="1" gridSize="10">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Switchover: handoff and follow-up are separate stages" style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=28;fontColor=#312D2A;fontStyle=1;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="25" width="1040" height="36" />
+        </mxCell>
+        <mxCell id="subtitle" value="Eligibility uses DB-system OCIDs. A changed display name does not change server identity." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=17;fontColor=#312D2A;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="66" width="1040" height="34" />
+        </mxCell>
+        <mxCell id="check" value="&lt;b&gt;1  Check readiness&lt;/b&gt;&lt;br&gt;&lt;br&gt;Blue is primary; Green standalone.&lt;br&gt;Verify GTIDs, channels and events." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#315f93;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="120" width="322" height="128" />
+        </mxCell>
+        <mxCell id="prepare" value="&lt;b&gt;2  Prepare the pair&lt;/b&gt;&lt;br&gt;&lt;br&gt;Disable Blue HA if needed.&lt;br&gt;Set Green RO; repeat checks." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#315f93;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="389" y="120" width="322" height="128" />
+        </mxCell>
+        <mxCell id="handoff" value="&lt;b&gt;3  OCI endpoint handoff&lt;/b&gt;&lt;br&gt;&lt;br&gt;OCI drains replication and&lt;br&gt;moves the primary endpoint." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#fffaf3;strokeColor=#9c4821;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="120" width="322" height="128" />
+        </mxCell>
+        <mxCell id="complete" value="&lt;b&gt;6  Confirm completion&lt;/b&gt;&lt;br&gt;&lt;br&gt;Verify final event and HA states.&lt;br&gt;Check channels and application." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="306" width="322" height="128" />
+        </mxCell>
+        <mxCell id="followup" value="&lt;b&gt;5  Apply selected options&lt;/b&gt;&lt;br&gt;&lt;br&gt;Enable promoted HA / channels.&lt;br&gt;Apply reviewed event states." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="389" y="306" width="322" height="128" />
+        </mxCell>
+        <mxCell id="verify" value="&lt;b&gt;4  Verify promotion&lt;/b&gt;&lt;br&gt;&lt;br&gt;Check Green OCID and SQL ID,&lt;br&gt;original endpoint, GTIDs and RW." style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=18;fontSize=18;fontFamily=Arial;fillColor=#ffffff;strokeColor=#287a50;fontColor=#312D2A;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="306" width="322" height="128" />
+        </mxCell>
+        <mxCell id="check-prepare" edge="1" source="check" target="prepare" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="prepare-handoff" edge="1" source="prepare" target="handoff" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="handoff-verify" edge="1" source="handoff" target="verify" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=0.5;exitY=1;entryX=0.5;entryY=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="verify-followup" edge="1" source="verify" target="followup" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=0;exitY=0.5;entryX=1;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="followup-complete" edge="1" source="followup" target="complete" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=block;strokeColor=#64748b;strokeWidth=2;exitX=0;exitY=0.5;entryX=1;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="warn" value="If step 5 fails after promotion: Green can already be primary." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=19;fontColor=#9c4821;fontStyle=1;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="466" width="1040" height="26" />
+        </mxCell>
+        <mxCell id="recovery" value="Finish the failed follow-up action; do not repeat a completed switchover." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontFamily=Arial;fontSize=18;fontColor=#312D2A;fontStyle=0;spacing=0;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="28" y="497" width="1040" height="26" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -41,7 +41,7 @@ Open `https://<compute-address>`. Sign in as `admin` with initial password `Chan
 
 ![Oracle-style architecture: OL9 control VM, private DB endpoints, regional HeatWave and Vault services, and compartment-scoped IAM](docs/architecture/heatwave-control.png)
 
-[Architecture (.drawio)](docs/architecture/heatwave-control.drawio) · [Technical guide](docs/technical-guide.md)
+[User manual](docs/user-manual.md) · [HTML manual](docs/user-manual.html) · [Technical guide](docs/technical-guide.md) · [Architecture (.drawio)](docs/architecture/heatwave-control.drawio)
 
 - Side-by-side Blue/Green details, live SQL version/mode/GTIDs, and searchable Variables and Status tables.
 - Reviewed HA, event and replication-channel handling, with paginated work requests and persistent activity history.

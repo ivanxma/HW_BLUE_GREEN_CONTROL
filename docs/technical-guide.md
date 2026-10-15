@@ -1,10 +1,14 @@
 # Technical guide
 
-[Project overview](../README.md) · [Architecture](architecture/heatwave-control.png) · [Architecture (.drawio)](architecture/heatwave-control.drawio)
+[Project overview](../README.md) · [User manual](user-manual.md) · [Architecture (.drawio)](architecture/heatwave-control.drawio)
 
 This guide describes the prototype's operation and the service behavior reviewed in October 2026. Rehearse with representative data before applying a production change. Native OCI eligibility and readiness checks remain authoritative.
 
 ## Architecture and network
+
+![OCI architecture showing the OL9 control VM, VCN and subnet boundaries, private DB endpoints, regional HeatWave and Vault services, and compartment-scoped IAM](architecture/heatwave-control.png)
+
+[Architecture (.drawio)](architecture/heatwave-control.drawio)
 
 The Flask web app and one workflow worker run on an Oracle Linux 9 Compute VM. Instance Principal authenticates OCI API requests. MySQL Connector/Python obtains managed-database passwords from OCI Vault and opens TLS SQL connections. Embedded MySQL stores registrations, event snapshots, plans and execution history through a local Unix socket; it has no TCP listener. MySQL Shell is installed for operator use.
 
@@ -68,6 +72,7 @@ For reviewed execution, replace the discovery grant with:
 
 ```text
 Allow dynamic-group <vm-group> to manage mysql-family in compartment id <db-compartment-ocid>
+Allow dynamic-group <vm-group> to read secrets in compartment id <secret-compartment-ocid>
 Allow dynamic-group <vm-group> to read secret-bundles in compartment id <secret-compartment-ocid>
 ```
 
@@ -120,7 +125,7 @@ SELECT @@version, @@global.replica_type_conversions,
 SHOW CREATE TABLE application_schema.large_table;
 ```
 
-These settings affect row-based replication across the server's channels, not just one table. Keep other inbound Green channels disabled during preparation. The app can select an existing target configuration during creation; later custom-configuration changes are performed through OCI. See [OCI configuration model](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/mysql/models/oci.mysql.models.ConfigurationVariables.html).
+These settings affect row-based replication across the server's channels, not just one table. Keep other inbound Green channels disabled during preparation. The app can select an existing target configuration during creation; later changes use **Edit configuration** to create and apply a new OCI configuration version. See [the configuration procedure](user-manual.md#change-a-db-configuration) and [OCI configuration model](https://docs.oracle.com/en-us/iaas/tools/python/latest/api/mysql/models/oci.mysql.models.ConfigurationVariables.html).
 
 ## Creation, HA, channels and events
 
