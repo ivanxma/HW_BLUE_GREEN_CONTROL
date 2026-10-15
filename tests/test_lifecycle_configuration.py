@@ -179,6 +179,58 @@ def test_optional_variable_removal_requires_warning_acknowledgement(harness):
     assert e.cloud.systems['blue']['configurationId']=='ha-config'
 
 
+@pytest.mark.parametrize('representation', ['legacy', 'options', 'both'])
+def test_configuration_preserves_initialization_without_mixing_api_fields(harness, representation):
+    e=harness;configure(e)
+    config=e.cloud.configurations['ha-config']
+    if representation in {'legacy','both'}:
+        config['initVariables']={'lowerCaseTableNames':'CASE_INSENSITIVE_LOWERCASE'}
+    if representation in {'options','both'}:
+        config['options'].append({'name':'lower_case_table_names','value':'CASE_INSENSITIVE_LOWERCASE'})
+    data=e.client.get('/api/db/blue/configuration-editor').json
+    assert data['initialization_variables']=={'lower_case_table_names':'CASE_INSENSITIVE_LOWERCASE'}
+    assert 'lower_case_table_names' not in data['variables']
+    path='/api/db/blue/configuration-versions'
+    params=draft(data,replica_type_conversions='ALL_NON_LOSSY',max_connect_errors='18446744073709551615')
+    body,_=confirm(e,path,params)
+    job=e.wait(e.post(path,body));assert job['status']=='SUCCEEDED',job
+    payload=mutations(e)[0]['body']
+    assert 'initVariables' not in payload and 'variables' not in payload
+    options={o['name']:o['value'] for o in payload['options']}
+    assert options=={**params['variables'],'lower_case_table_names':'CASE_INSENSITIVE_LOWERCASE'}
+    assert e.cloud.systems['blue']['configurationId']=='ha-config'
+    # The new OCI response has initialization in options only. Applying that
+    # unchanged setting must still pass the initialization compatibility check.
+    apply={'action':'configuration','configuration_id':'configuration-version'}
+    body,_=confirm(e,'/api/db/blue/action',apply)
+    job=e.wait(e.post('/api/db/blue/action',body));assert job['status']=='SUCCEEDED',job
+
+
+def test_custom_initialization_override_survives_configuration_version(harness):
+    e=harness;configure(e)
+    e.cloud.configurations['green-config']['initVariables']={'lowerCaseTableNames':'CASE_SENSITIVE'}
+    current=e.cloud.configurations['ha-config']
+    current.update(type='CUSTOM',compartmentId='contract-comp',parentConfigurationId='green-config')
+    current['options'].append({'name':'lower_case_table_names','value':'CASE_INSENSITIVE_LOWERCASE'})
+    data=e.client.get('/api/db/blue/configuration-editor').json
+    assert data['initialization_variables']['lower_case_table_names']=='CASE_INSENSITIVE_LOWERCASE'
+    path='/api/db/blue/configuration-versions';body,_=confirm(e,path,draft(data))
+    job=e.wait(e.post(path,body));assert job['status']=='SUCCEEDED',job
+    payload=mutations(e)[0]['body']
+    assert payload['parentConfigurationId']==IDS['green-config']
+    assert {o['name']:o['value'] for o in payload['options']}['lower_case_table_names']=='CASE_INSENSITIVE_LOWERCASE'
+
+
+def test_known_configuration_validation_error_does_not_expose_request_body():
+    import oci
+    from modules.oci_service import public_error
+    error=oci.exceptions.ServiceError(400,'InvalidParameter',{'opc-request-id':'example-request'},
+        'attribute = {configurationDetails}, value = {secret-bearing request body} - cannot specify both options and initVariables simultaneously.')
+    message=public_error(error)
+    assert 'cannot be combined' in message and 'example-request' in message
+    assert 'secret-bearing' not in message and 'configurationDetails' not in message
+
+
 @pytest.mark.parametrize('values', [{'server_uuid':'forged'},{'autocommit':'MAYBE'},{'connect_timeout':'1'},
     {'connect_timeout':'10.5'},{'replica_type_conversions':'ALL_SIGNED,ALL_SIGNED'},
     {'replica_type_conversions':'INVENTED'},{'optimizer_switch':'invented=on'}])
@@ -196,7 +248,7 @@ def test_mandatory_variables_cannot_be_removed():
     assert 'mysqlx_enable_hello_notice' not in VARIABLES
 
 
-@pytest.mark.parametrize('change', ['shape','ha','compartment','initialization'])
+@pytest.mark.parametrize('change', ['shape','ha','compartment','initialization','initialization_options'])
 def test_configuration_apply_checks_shape_ha_scope_initialization(harness,change):
     e=harness;configure(e)
     config=e.cloud.configurations['green-config']
@@ -204,6 +256,7 @@ def test_configuration_apply_checks_shape_ha_scope_initialization(harness,change
     if change=='ha':config['displayName']='MySQL.8.Standalone'
     if change=='compartment':config.update(type='CUSTOM',compartmentId='denied-comp')
     if change=='initialization':config['initVariables']={'lowerCaseTableNames':'CASE_INSENSITIVE'}
+    if change=='initialization_options':config['options']=[{'name':'lower_case_table_names','value':'CASE_INSENSITIVE'}]
     response=e.post('/api/operation-plan',{'path':route_ids('/api/db/blue/action'),
         'params':{'action':'configuration','configuration_id':'green-config'}})
     assert response.status_code==400,response.json

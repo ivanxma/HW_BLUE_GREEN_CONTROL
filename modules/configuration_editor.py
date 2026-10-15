@@ -6,6 +6,7 @@ from pathlib import Path
 
 CATALOG = json.loads(Path(__file__).with_name('configuration_variables.json').read_text())
 VARIABLES = CATALOG['variables']
+INITIALIZATION_VARIABLES = {'lower_case_table_names'}
 REMOVAL_WARNING = ('Removing a variable from this configuration does not reset or remove an already persisted '
                    'value on an existing DB system. Inherited/default values may still apply. '
                    'Change its value instead when you need to change DB behavior.')
@@ -16,6 +17,19 @@ def values(configuration):
               for name, value in (configuration.get('variables') or {}).items() if value is not None}
     result.update({option['name']: str(option['value']) for option in configuration.get('options') or []
                    if option.get('value') is not None})
+    return result
+
+
+def initialization_values(configuration):
+    """Read initialization settings from either OCI representation.
+
+    The modern options list includes initialization settings as well as user
+    variables. It is authoritative when the response also has legacy fields.
+    """
+    result = {name: str(value) for name, value in (configuration.get('init_variables') or {}).items()
+              if value is not None}
+    result.update({option['name']: str(option['value']) for option in configuration.get('options') or []
+                   if option.get('name') in INITIALIZATION_VARIABLES and option.get('value') is not None})
     return result
 
 

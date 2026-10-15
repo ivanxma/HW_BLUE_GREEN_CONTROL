@@ -9,7 +9,8 @@ import urllib.request
 import oci
 from .resource_actions import (confirmation_snapshot, db_lifecycle_blocker,
                                deployment_delete_blocker, require_allowed)
-from .configuration_editor import CATALOG, VARIABLES, REMOVAL_WARNING, values, next_name, validate_values
+from .configuration_editor import (CATALOG, VARIABLES, INITIALIZATION_VARIABLES, REMOVAL_WARNING,
+                                   values, initialization_values, next_name, validate_values)
 
 M = oci.mysql.models
 
@@ -27,7 +28,12 @@ def visible_resources(resources):
 def public_error(exc):
     # SDK/SQL exception text may include credentials or submitted request bodies.
     if isinstance(exc, oci.exceptions.ServiceError):
-        return f'OCI {exc.status} {exc.code}; request ID {exc.request_id or "unavailable"}'
+        hint = ''
+        if exc.status == 400 and exc.code == 'InvalidParameter' and re.search(
+                r'cannot specify both options and (?:initVariables|variables) simultaneously\.?$', exc.message or ''):
+            # Match a known service constraint without exposing its echoed body.
+            hint = ': configuration options cannot be combined with legacy initialization/variable fields'
+        return f'OCI {exc.status} {exc.code}{hint}; request ID {exc.request_id or "unavailable"}'
     if isinstance(exc, (ValueError, RuntimeError, TimeoutError)):
         return str(exc)[:600]
     return f'{type(exc).__name__}: operation failed; check IAM, network connectivity and service state'
@@ -115,9 +121,10 @@ class OCIService:
         configured, initialization = {}, {}
         for config in reversed(chain):
             configured.update(values(config))
-            initialization.update({k: v for k, v in (config.get('init_variables') or {}).items() if v is not None})
+            initialization.update(initialization_values(config))
         baseline = values(chain[-1])
-        unknown_overrides = [name for name, value in configured.items() if name not in VARIABLES and value != baseline.get(name)]
+        unknown_overrides = [name for name, value in configured.items()
+                             if name not in VARIABLES and name not in INITIALIZATION_VARIABLES and value != baseline.get(name)]
         if unknown_overrides:
             raise ValueError('Cannot safely copy unrecognized configuration overrides: ' + ', '.join(unknown_overrides))
         configurations = rows(self.mysql.list_configurations, db['compartment_id'])
@@ -150,12 +157,14 @@ class OCIService:
             raise ValueError('DB system changed; reopen the configuration editor')
         # Derive from the verified default base, not the previous custom version:
         # omitted optional overrides must not silently be copied from that version.
+        # OCI rejects options together with initVariables/variables. Preserve the
+        # verified initialization settings in the same options representation.
+        options = {**submitted, **editor['initialization_variables']}
         details = M.CreateConfigurationDetails(compartment_id=db['compartment_id'],
             shape_name=db['shape_name'], display_name=editor['suggested_name'],
             description='Version of ' + editor['source']['display_name'],
             parent_configuration_id=editor['base_configuration_id'],
-            init_variables=M.InitializationVariables(**{k: v for k, v in editor['initialization_variables'].items() if v is not None}),
-            options=[M.Option(name=name, value=value) for name, value in sorted(submitted.items())])
+            options=[M.Option(name=name, value=value) for name, value in sorted(options.items())])
         return self.mysql.create_configuration(details, retry_strategy=oci.retry.NoneRetryStrategy())
 
     def validate_configuration_apply(self, db, configuration_id):
@@ -169,7 +178,7 @@ class OCIService:
             result, seen = {}, set()
             while value and value['id'] not in seen:
                 seen.add(value['id'])
-                for key, item in (value.get('init_variables') or {}).items():
+                for key, item in initialization_values(value).items():
                     if item is not None and key not in result:
                         result[key] = item
                 parent = value.get('parent_configuration_id')

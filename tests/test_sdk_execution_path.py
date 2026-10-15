@@ -225,6 +225,7 @@ class OracleHTTP:
         elif path.endswith('/configurations'):
             if method=='POST':
                 assert body['shapeName']=='MySQL.8'
+                assert not ('options' in body and any(k in body for k in ['initVariables','variables'])), 'OCI configuration representations are mutually exclusive'
                 self.configurations['configuration-version']={**deepcopy(body),'id':'configuration-version','type':'CUSTOM','lifecycleState':'ACTIVE'}
                 payload=mutation(deepcopy(self.configurations['configuration-version']))
             else:payload=list(deepcopy(self.configurations).values())
