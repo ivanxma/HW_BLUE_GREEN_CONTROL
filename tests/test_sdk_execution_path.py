@@ -99,8 +99,8 @@ class OracleHTTP:
         self.calls=[];self.created=False;self.switched=False;self.requests={};self.observer=None
         self.health=True;self.next_failure=False;self.green_ha=False;self.root_denied=False;self.registration_denied=False;self.replica_denied=False
         self.replicas=[]
-        self.etag_conflicts=0;self.etag_drift=False;self.etag_missing=False;self.etag_reads=0;self.update_error=None
-        self.allow_standard_updates=False;self.db_read_changes={}
+        self.resource_reads=0;self.update_error=None
+        self.db_read_changes={};self.channel_read_changes={}
         self.work_details_errors={}
         self.work_summaries=[]
         self.configurations={name:{'id':name,'displayName':'MySQL.8.HA','shapeName':'MySQL.8',
@@ -155,18 +155,21 @@ class OracleHTTP:
             signed='authorization' in {k.lower() for k in prepared.headers}
             assert signed
         entry={'method':method,'path':path,'body':self.redact(body),'instance_principal_signed':signed,
-               'if_match':(headers or {}).get('if-match'),'retry_token_present':bool((headers or {}).get('opc-retry-token'))}
+               'if_match':{k.lower():v for k,v in (headers or {}).items()}.get('if-match'),'retry_token_present':bool((headers or {}).get('opc-retry-token'))}
         self.calls.append(entry)
+        if method in {'POST','PUT','DELETE'}:
+            assert entry['if_match'] is None, 'Application mutations must use Standard OCI requests'
         # Routing aliases are internal to the HTTP stand-in; requests carry valid-format OCIDs.
         body=ids(body,True)
         for ocid,alias in REVERSE.items():path=path.replace(ocid,alias)
         resource_update = '/dbSystems/' in path or ('/channels/' in path and not '/actions/' in path and not path.endswith('/channelStatus'))
         if resource_update and method == 'GET':
-            self.etag_reads += 1
-            if '/dbSystems/' in path and self.etag_reads in self.db_read_changes:
-                self.systems['blue'].update(self.db_read_changes[self.etag_reads])
-            response_headers['etag'] = 'contract-etag-'+str(self.etag_reads)
-            if self.etag_missing:response_headers.pop('etag')
+            self.resource_reads += 1
+            if '/dbSystems/' in path and self.resource_reads in self.db_read_changes:
+                self.systems['blue'].update(self.db_read_changes[self.resource_reads])
+            response_headers['etag'] = 'contract-etag-'+str(self.resource_reads)
+            if '/channels/' in path and self.resource_reads in self.channel_read_changes:
+                self.channels['inbound'].update(self.channel_read_changes[self.resource_reads])
         def mutation(payload=None):
             wr=self.wr();response_headers['opc-work-request-id']=wr;entry['work_request']=wr
             return payload or {}
@@ -175,15 +178,8 @@ class OracleHTTP:
             return ids(next((v for k,v in values if k==name),None),True)
         entry['compartment_id']=ids(query('compartmentId'))
         status_code=200
-        if resource_update and method=='PUT' and ((self.etag_conflicts and entry['if_match']) or self.update_error):
-            assert entry['if_match']=='contract-etag-'+str(self.etag_reads) or (self.allow_standard_updates and entry['if_match'] is None)
-            if self.update_error:
-                status_code=self.update_error;payload={'code':'InternalError','message':'Injected service failure'}
-            else:
-                self.etag_conflicts-=1;status_code=412;payload={'code':'NoEtagMatch','message':'Injected validator conflict'}
-                if self.etag_drift:
-                    self.systems['blue']['description']='Concurrent operator edit'
-                    self.channels['inbound']['description']='Concurrent operator edit'
+        if resource_update and method=='PUT' and self.update_error:
+            status_code=self.update_error;payload={'code':'NoEtagMatch' if status_code==412 else 'InternalError','message':'Injected service failure'}
         elif query('compartmentId')=='denied-comp':
             payload={'code':'NotAuthorizedOrNotFound','message':'Contract selected compartment is not authorized'};status_code=404
         elif (self.root_denied and query('compartmentId')=='contract-tenancy' or self.registration_denied) and method=='GET' and path.endswith('/blueGreenDeployments'):
@@ -231,7 +227,7 @@ class OracleHTTP:
             db_id=path.split('/dbSystems/')[-1]
             if method=='PUT':
                 assert not (body.get('isHighlyAvailable') is True and 'configurationId' in body), 'HA toggle must be separate from a configuration change'
-                assert entry['if_match']=='contract-etag-'+str(self.etag_reads) or (self.allow_standard_updates and entry['if_match'] is None)
+                assert entry['if_match'] is None
                 assert not any(k in body for k in ['accessMode','adminPassword'])
                 self.systems[db_id].update(body);payload=mutation(self.db(db_id))
             else:payload=self.db(db_id)
@@ -258,7 +254,7 @@ class OracleHTTP:
         elif '/channels/' in path:
             channel_id=path.split('/channels/')[-1]
             if method=='PUT':
-                assert entry['if_match']=='contract-etag-'+str(self.etag_reads)
+                assert entry['if_match'] is None
                 self.channels[channel_id].update(body);payload=mutation(deepcopy(self.channels[channel_id]))
             elif method=='DELETE':self.channels.pop(channel_id);payload=mutation()
             else:payload=deepcopy(self.channels[channel_id])
@@ -371,7 +367,7 @@ def source_review(env,db='blue',target=False):
             'after':'ENABLE' if target and i==0 else 'DISABLE' if target else 'KEEP'} for i,e in enumerate(data['events'])]}
 
 
-def create(env,restore_ha=True,db_update_mode='ETAG'):
+def create(env,restore_ha=True,db_update_mode='STANDARD'):
     return env.wait(env.post('/api/create',{'source_id':'blue','display_name':'Contract deployment',
         'replication_username':'replication','replication_secret_id':'secret','secret_compartment_id':'contract-comp',
         'mysql_version':'9.5.2','shape_name':'MySQL.8','configuration_id':'green-config','data_storage_size_in_gbs':200,
@@ -380,72 +376,36 @@ def create(env,restore_ha=True,db_update_mode='ETAG'):
 
 
 @pytest.mark.parametrize('resource', ['db', 'channel'])
-@pytest.mark.parametrize('failure', ['transient', 'persistent', 'changed', 'missing', 'other'])
-def test_conditional_updates_keep_concurrency_protection(harness, resource, failure):
-    e=harness
-    e.cloud.etag_conflicts=1 if failure in ['transient','changed'] else 100 if failure=='persistent' else 0
-    e.cloud.etag_drift=failure=='changed'
-    e.cloud.etag_missing=failure=='missing'
-    e.cloud.update_error=503 if failure=='other' else None
-    action=(lambda:e.service.update_db(IDS['blue'],is_highly_available=False)) if resource=='db' else (lambda:e.service.set_channel(IDS['inbound'],False))
-    limit=12 if resource=='db' else 3
-    if failure=='transient':
-        response=action()
-        assert response.headers.get('opc-work-request-id')
-        assert [a['status'] for a in response.etag_attempts]==[412,200]
-    elif failure=='other':
+@pytest.mark.parametrize('status', [None, 412, 500, 503])
+def test_standard_updates_omit_conditions_and_never_retry(harness, resource, status):
+    e=harness;e.cloud.update_error=status
+    action=(lambda:e.service.update_db(IDS['blue'],expected_compartment=IDS['contract-comp'],is_highly_available=False)) if resource=='db' else (lambda:e.service.set_channel(IDS['inbound'],False,expected_compartment=IDS['contract-comp']))
+    if status:
         with pytest.raises(oci.exceptions.ServiceError) as caught:action()
-        assert caught.value.status==503
+        assert caught.value.status==status
     else:
-        expected={'persistent':f'after {limit} fresh ETag attempts','changed':'resource details changed','missing':'no ETag'}[failure]
-        with pytest.raises(RuntimeError,match=expected):action()
+        assert action().headers.get('opc-work-request-id')
     puts=[c for c in e.cloud.calls if c['method']=='PUT']
-    assert len(puts)=={'transient':2,'persistent':limit,'changed':1,'missing':0,'other':1}[failure]
-    assert len({c['if_match'] for c in puts})==len(puts)
-    assert all(c['if_match'] and c['if_match']!='*' for c in puts)
-    assert len(e.cloud.requests)==(1 if failure=='transient' else 0)
-    client=e.service.db if resource=='db' else e.service.ch
-    assert client.base_client.session.headers['Accept-Encoding']=='identity'
-    if failure!='transient':
-        assert e.cloud.systems['blue']['isHighlyAvailable'] is True
-        assert e.cloud.channels['inbound']['isEnabled'] is True
+    assert len(puts)==1 and puts[0]['if_match'] is None
+    assert len(e.cloud.requests)==(0 if status else 1)
+    assert e.cloud.systems['blue']['isHighlyAvailable']==(bool(status) if resource=='db' else True)
+    assert e.cloud.channels['inbound']['isEnabled']==(bool(status) if resource=='channel' else True)
 
 
-@pytest.mark.parametrize('conflicts', [1, 3, 11, 20])
-def test_creation_handles_ha_etag_conflict_before_native_creation(harness, conflicts):
-    e=harness;e.cloud.etag_conflicts=conflicts
-    job=create(e,restore_ha=False)
-    if conflicts<12:
-        assert job['status']=='SUCCEEDED',job
-        assert e.cloud.created
-        assert e.sql.states['blue'][0]['status']=='ENABLED'
-        detail=json.loads(next(event['detail'] for event in job['events'] if event['step']=='Disable Blue HA'))
-        attempts=detail['etag_attempts']
-        assert len(attempts)==conflicts+1 and attempts[-1]['work_request']
-        assert all(a['status']==412 for a in attempts[:-1])
-    else:
-        assert job['status']=='FAILED'
-        assert not e.cloud.created
-        assert e.cloud.systems['blue']['isHighlyAvailable'] is True
-        assert not e.cloud.requests
-        assert any(event['step']=='Disable Blue HA' and 'after 12 fresh ETag attempts' in event['detail']
-                   for event in job['events'])
-
-
-def test_final_etag_rejection_checks_for_resource_drift(harness):
-    e=harness;e.cloud.etag_conflicts=100
-    e.cloud.db_read_changes[13]={'configurationId':'green-config'}
-    with pytest.raises(RuntimeError,match='resource details changed') as caught:
-        e.service.update_db(IDS['blue'],is_highly_available=False)
-    assert len(caught.value.etag_attempts)==12
-    puts=[c for c in e.cloud.calls if c['method']=='PUT']
-    assert len(puts)==12 and all(c['if_match'] for c in puts)
-    assert not e.cloud.requests and e.cloud.systems['blue']['isHighlyAvailable'] is True
+@pytest.mark.parametrize('guard', ['scope','busy','changed','moved','missing_scope'])
+def test_standard_channel_updates_recheck_scope_and_details(harness, guard):
+    e=harness
+    compartment=IDS['denied-comp'] if guard=='scope' else None if guard=='missing_scope' else IDS['contract-comp']
+    if guard=='busy':e.cloud.channels['inbound']['lifecycleState']='UPDATING'
+    if guard=='changed':e.cloud.channel_read_changes[2]={'description':'Concurrent edit'}
+    if guard=='moved':e.cloud.channel_read_changes[2]={'compartmentId':'denied-comp'}
+    with pytest.raises(ValueError):e.service.set_channel(IDS['inbound'],False,expected_compartment=compartment)
+    assert not any(c['method']=='PUT' for c in e.cloud.calls)
 
 
 @pytest.mark.parametrize('guard', ['scope','inactive','changed','moved','missing_scope','invalid_mode','service_error'])
 def test_standard_db_updates_check_scope_state_and_never_replay(harness, guard):
-    e=harness;e.cloud.allow_standard_updates=True
+    e=harness
     compartment=IDS['denied-comp'] if guard=='scope' else None if guard=='missing_scope' else IDS['contract-comp']
     if guard=='inactive':e.cloud.systems['blue']['lifecycleState']='UPDATING'
     if guard=='changed':e.cloud.db_read_changes[2]={'configurationId':'green-config'}
@@ -556,10 +516,9 @@ def test_status_routes_clear_sql_observation_on_connection_failure_and_recover(h
     assert recovered['telemetry_available'] is True and recovered['gtid'] and 'telemetry_error' not in recovered
 
 
-@pytest.mark.parametrize('mode',['STANDARD','ETAG'])
-def test_ha_only_update_omits_unchanged_configuration(harness,mode):
+def test_ha_only_update_omits_unchanged_configuration(harness):
     e=harness;assert create(e,False)['status']=='SUCCEEDED'
-    e.cloud.allow_standard_updates=mode=='STANDARD';e.cloud.calls.clear()
+    mode='STANDARD';e.cloud.calls.clear()
     result=e.wait(e.post('/api/db/green/action',{'action':'ha_on','db_update_mode':mode}))
     assert result['status']=='FAILED' # Unpromoted Green remains protected.
     e.cloud.dep.update(activeDbSystemId='green',switchoverStatus='SWITCHOVER_COMPLETED')
@@ -570,7 +529,6 @@ def test_ha_only_update_omits_unchanged_configuration(harness,mode):
 
 
 def test_ha_parameter_rejection_keeps_safe_service_explanation(harness):
-    harness.cloud.allow_standard_updates=True
     e=harness;assert create(e,False)['status']=='SUCCEEDED'
     e.cloud.dep.update(activeDbSystemId='green',switchoverStatus='SWITCHOVER_COMPLETED')
     e.cloud.update_error=400
@@ -631,7 +589,6 @@ def test_creation_catalog_uses_db_shapes_versions_and_shape_matched_configuratio
 
 @pytest.mark.parametrize('case',['different_shape','unknown_shape','unknown_version','downgrade','target_mismatch','promoted_missing','promoted_mismatch','original_shape_optional'])
 def test_creation_target_choices_checked_before_any_mutation(harness,case):
-    harness.cloud.allow_standard_updates=True
     e=harness
     if case!='original_shape_optional':
         e.cloud.configurations['green-config']['shapeName']='MySQL.16'
@@ -680,36 +637,58 @@ def test_swapped_display_names_keep_original_blue_green_ocids_and_primary(harnes
 
 
 def test_standard_mode_is_explicit_in_preview_and_journal(harness):
-    e=harness;e.cloud.allow_standard_updates=True
+    e=harness
     params={'action':'ha_off','db_update_mode':'STANDARD'}
     preview=e.post('/api/operation-plan',{'path':'/api/db/'+IDS['blue']+'/action','params':params})
-    assert preview.status_code==200 and preview.json['supports_db_update_mode']
+    assert preview.status_code==200 and 'supports_db_update_mode' not in preview.json
     assert preview.json['db_update_mode']=='STANDARD'
-    assert any('no atomic ETag version check' in c for c in preview.json['checks'])
+    assert any('Standard OCI requests' in c for c in preview.json['checks'])
     assert not e.store.history() and not any(c['method']=='PUT' for c in e.cloud.calls)
     job=e.wait(e.post('/api/db/blue/action',params))
     assert job['status']=='SUCCEEDED' and job['params']['db_update_mode']=='STANDARD'
     assert job['params']['compartment_id']==IDS['contract-comp']
-    assert 'atomic_etag_check' in job['events'][0]['detail']
+    assert json.loads(job['events'][0]['detail'])['automatic_mutation_retries'] is False
     assert e.post('/api/db/blue/action',{'action':'ha_off','db_update_mode':'invalid'}).status_code==400
     assert len(e.store.history())==1
 
 
-@pytest.mark.parametrize('mode', ['ETAG', 'STANDARD'])
-def test_full_creation_and_switchover_through_real_sdk(harness, mode):
+@pytest.mark.parametrize('action,desired', [('read_only','READ_ONLY'),('read_write','READ_WRITE')])
+def test_read_write_buttons_always_submit_standard_updates(harness,action,desired):
     e=harness
-    e.cloud.allow_standard_updates=mode=='STANDARD'
-    # The opt-in standard path succeeds at the HTTP boundary even if every
-    # conditional DB update would be rejected. Channel checks retain ETags.
-    if mode=='STANDARD':e.cloud.etag_conflicts=100
+    e.cloud.systems['green']['databaseMode']='READ_WRITE' if desired=='READ_ONLY' else 'READ_ONLY'
+    params={'action':action}
+    preview=e.post('/api/operation-plan',{'path':'/api/db/'+IDS['green']+'/action','params':params})
+    assert preview.status_code==200 and preview.json['db_update_mode']=='STANDARD'
+    result=e.wait(e.post('/api/db/green/action',params))
+    assert result['status']=='SUCCEEDED' and result['params']['db_update_mode']=='STANDARD'
+    puts=[c for c in e.cloud.calls if c['method']=='PUT']
+    assert len(puts)==1 and puts[0]['body']=={'databaseMode':desired} and puts[0]['if_match'] is None
+    assert e.cloud.systems['green']['databaseMode']==desired
+
+
+def test_stale_update_modes_are_rejected_before_mutation(harness):
+    e=harness
+    create_params={'source_id':'blue','display_name':'Stale client','replication_username':'replication',
+        'replication_secret_id':'secret','secret_compartment_id':'contract-comp'}
+    requests=[('/api/create',create_params),('/api/db/green/action',{'action':'read_write'}),
+              ('/api/deployments/deployment/action',{'action':'switchover'})]
+    for path,params in requests:
+        params={**params,'db_update_mode':'ETAG'}
+        assert e.post('/api/operation-plan',{'path':route_ids(path),'params':params}).status_code==400
+        response=e.post(path,params)
+        assert response.status_code==400 and 'Only Standard OCI updates' in response.json['error']
+    assert not e.store.history() and not any(c['method']!='GET' for c in e.cloud.calls)
+
+
+def test_full_creation_and_switchover_through_real_sdk(harness):
+    e=harness;mode='STANDARD'
     assert e.post('/api/observer/blue',{'username':'observer','secret_id':'secret','secret_compartment_id':'contract-comp'}).status_code==200
     catalog=e.client.get('/api/catalog').json;assert catalog['vaults'][0]['id']==IDS['vault']
     assert e.client.get('/api/keys?vault_id=vault').json[0]['id']==IDS['key']
     assert e.post('/api/secrets',{'compartment_id':'contract-comp','vault_id':'vault','key_id':'key','name':'new','password':'contract-value'}).status_code==200
     job=create(e,db_update_mode=mode);assert job['status']=='SUCCEEDED',job
     assert job['params']['db_update_mode']==mode
-    if mode=='STANDARD':assert job['events'][0]['step']=='Operator selected standard OCI DB-system updates'
-    e.cloud.etag_conflicts=0
+    assert job['events'][0]['step']=='Standard OCI DB-system updates'
     assert e.sql.events('blue')[0]['status']=='ENABLED'
     assert e.sql.events('blue')[1]['status']=='DISABLED'
     assert e.cloud.systems['blue']['isHighlyAvailable'] and not e.cloud.systems['green']['isHighlyAvailable']
@@ -744,8 +723,8 @@ def test_full_creation_and_switchover_through_real_sdk(harness, mode):
     assert e.cloud.secret not in json.dumps(e.store.history())
     assert e.cloud.secret.encode() not in e.client.get('/api/dashboard').data
     db_updates=[c for c in e.cloud.calls if c['method']=='PUT' and '/dbSystems/' in c['path']]
-    assert db_updates and all((c['if_match'] is None)==(mode=='STANDARD') for c in db_updates)
-    assert all(c['if_match'] for c in e.cloud.calls if c['method']=='PUT' and '/channels/' in c['path'])
+    assert db_updates and all(c['if_match'] is None for c in db_updates)
+    assert all(c['if_match'] is None for c in e.cloud.calls if c['method']=='PUT' and '/channels/' in c['path'])
     for event in result['events']:
         assert event['ended']>=event['started']
         if event.get('work_request'):
@@ -1025,7 +1004,6 @@ def test_switchover_preview_lists_actual_ha_and_mode_changes_without_execution(h
 
 @pytest.mark.parametrize('case', ['registered_blue','original_blue','current_blue','current_green','registered_override','explicit_override','no_ha'])
 def test_optional_promotion_ha_configuration_preview_and_execution(harness,case):
-    harness.cloud.allow_standard_updates=True
     e=harness;assert create(e,False)['status']=='SUCCEEDED'
     key='plan:'+IDS['deployment'];plan=e.store.get(key)
     expected=IDS['ha-config']
@@ -1080,11 +1058,11 @@ def test_mutations_cannot_target_another_compartment(harness,route,body):
 
 
 def test_standard_defaults_match_preview_and_ha_create_switchover_execution(harness):
-    e=harness;e.cloud.allow_standard_updates=True
+    e=harness
     for action in ['ha_off','ha_on']:
         params={'action':action}
         preview=e.post('/api/operation-plan',{'path':'/api/db/'+IDS['blue']+'/action','params':params})
-        assert preview.json['db_update_mode']=='STANDARD' and preview.json['default_db_update_mode']=='STANDARD'
+        assert preview.json['db_update_mode']=='STANDARD' and 'default_db_update_mode' not in preview.json
         result=e.wait(e.post('/api/db/blue/action',params))
         assert result['status']=='SUCCEEDED' and result['params']['db_update_mode']=='STANDARD'
     params={'source_id':'blue','display_name':'Default mode','replication_username':'replication',
@@ -1104,8 +1082,9 @@ def test_standard_defaults_match_preview_and_ha_create_switchover_execution(harn
     assert result['status']=='SUCCEEDED' and result['params']['db_update_mode']=='STANDARD'
     db_updates=[c for c in e.cloud.calls if c['method']=='PUT' and '/dbSystems/' in c['path']]
     assert db_updates and all(c['if_match'] is None for c in db_updates)
-    assert all(c['if_match'] for c in e.cloud.calls if c['method']=='PUT' and '/channels/' in c['path'])
+    assert all(c['if_match'] is None for c in e.cloud.calls if c['method']=='PUT' and '/channels/' in c['path'])
     for action in ['ha_off','read_only']:
         params={'action':action,'db_update_mode':'ETAG'}
         preview=e.post('/api/operation-plan',{'path':'/api/db/'+IDS['green']+'/action','params':params})
-        assert preview.json['db_update_mode']=='ETAG'
+        assert preview.status_code==400 and 'Only Standard OCI updates' in preview.json['error']
+        assert e.post('/api/db/green/action',params).status_code==400

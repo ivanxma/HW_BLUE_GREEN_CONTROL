@@ -36,10 +36,11 @@ class Workflow:
 
     def run(self, job, kind, resource, params):
         try:
-            if db_update_mode(params) == 'STANDARD':
-                self.step(job, 'Operator selected standard OCI DB-system updates', lambda wait: {
-                    'db_update_mode': 'STANDARD', 'compartment_id': params['compartment_id'],
-                    'atomic_etag_check': False, 'automatic_mutation_retries': False,
+            db_update_mode(params)
+            if kind in {'create', 'switchover', 'update_db'}:
+                self.step(job, 'Standard OCI DB-system updates', lambda wait: {
+                    'db_update_mode': 'STANDARD', 'compartment_id': params.get('compartment_id'),
+                    'automatic_mutation_retries': False,
                     'checks': 'Fresh ACTIVE state, selected compartment and unchanged details before each update'})
             if kind == 'create':
                 self.create(job, params)
@@ -67,7 +68,7 @@ class Workflow:
                         return {'disabled': True}
                     status = self.service.channel_health(resource, True, wait)
                     if (status.get('channel_status_result') or {}).get('is_healthy') is False:
-                        wait(self.service.set_channel(resource, False))
+                        wait(self.service.set_channel(resource, False, expected_compartment=params['compartment_id']))
                         return {'disabled': True, 'recommended_action': 'Fix or delete this unhealthy channel'}
                     return {'disabled': False, 'detail': 'Fresh status did not confirm unhealthy replication'}
                 self.step(job, 'Quarantine unhealthy replication channel', quarantine)
@@ -83,11 +84,11 @@ class Workflow:
                             if detail.get('active_db_system_id') != detail.get('target_db_system_id'):
                                 raise ValueError('Green inbound channels must remain disabled until switchover')
                     wait(self.service.delete_channel(resource) if kind == 'delete_channel'
-                         else self.service.set_channel(resource, kind == 'enable_channel'))
+                         else self.service.set_channel(resource, kind == 'enable_channel', expected_compartment=params['compartment_id']))
                     if kind == 'enable_channel':
                         health = self.service.channel_health(resource, True, wait)
                         if (health.get('channel_status_result') or {}).get('is_healthy') is not True:
-                            wait(self.service.set_channel(resource, False))
+                            wait(self.service.set_channel(resource, False, expected_compartment=params['compartment_id']))
                             raise ValueError('Enabled channel did not pass health verification and was disabled; fix or delete it')
                 self.step(job, kind.replace('_', ' '), action)
             elif kind == 'event_states':
@@ -111,24 +112,15 @@ class Workflow:
 
     def step(self, job, label, operation):
         eid = self.store.event(job, label)
-        etag_attempts = []
         def wait(response):
-            etag_attempts.extend(getattr(response, 'etag_attempts', []))
-            if etag_attempts:
-                self.store.put(f'etag-attempts:{job}:{eid}', etag_attempts)
             self.service.wait(response, lambda wr: self.store.update_event(eid, work_request=wr))
             return response
         try:
             result = operation(wait)
         except Exception as exc:
-            evidence = getattr(exc, 'etag_attempts', [])
-            if evidence:
-                self.store.put(f'etag-attempts:{job}:{eid}', evidence)
             self.store.update_event(eid, 'FAILED', public_error(exc))
             raise
         detail = json.dumps(result, default=str) if isinstance(result, (dict, list)) else 'Completed'
-        if etag_attempts:
-            detail = json.dumps({'result': detail, 'etag_attempts': etag_attempts}, default=str)
         self.store.update_event(eid, 'SUCCEEDED', detail)
         return result
 
@@ -140,10 +132,8 @@ class Workflow:
 
     def update_db(self, params, db_id, **options):
         try:
-            if db_update_mode(params) == 'STANDARD':
-                return self.service.update_db(db_id, db_update_mode='STANDARD',
-                                              expected_compartment=params['compartment_id'], **options)
-            return self.service.update_db(db_id, **options)
+            db_update_mode(params)
+            return self.service.update_db(db_id, expected_compartment=params['compartment_id'], **options)
         except oci.exceptions.ServiceError as exc:
             # These update paths contain no credentials. Preserve the service's
             # parameter explanation without exposing bodies from other APIs.
@@ -214,7 +204,7 @@ class Workflow:
                                    lambda wait, c=channel: service.channel_health(c['id'], True, wait))
                 result = health.get('channel_status_result') or {}
                 if result.get('is_healthy') is False:
-                    self.step(job, 'Disable unhealthy inbound channel', lambda wait, c=channel: wait(service.set_channel(c['id'], False)))
+                    self.step(job, 'Disable unhealthy inbound channel', lambda wait, c=channel: wait(service.set_channel(c['id'], False, expected_compartment=p['compartment_id'])))
                 elif result.get('is_healthy') is not True:
                     raise ValueError('Inbound channel health could not be established')
         def make(wait):
@@ -373,10 +363,10 @@ class Workflow:
         db = self.service.db_system(green_id)
         for channel in self.service.channels(green_id, db['compartment_id']):
             if self.store.get('copy:' + channel['id']):
-                self.step(job, 'Enable copied inbound channel', lambda wait, c=channel: wait(self.service.set_channel(c['id'], True)))
+                self.step(job, 'Enable copied inbound channel', lambda wait, c=channel: wait(self.service.set_channel(c['id'], True, expected_compartment=db['compartment_id'])))
                 health = self.step(job, 'Verify enabled channel health', lambda wait, c=channel: self.service.channel_health(c['id'], True, wait))
                 if (health.get('channel_status_result') or {}).get('is_healthy') is not True:
-                    self.step(job, 'Disable unhealthy copied channel', lambda wait, c=channel: wait(self.service.set_channel(c['id'], False)))
+                    self.step(job, 'Disable unhealthy copied channel', lambda wait, c=channel: wait(self.service.set_channel(c['id'], False, expected_compartment=db['compartment_id'])))
                     raise ValueError('Copied channel was unhealthy and has been disabled; fix or delete it')
 
     def event_before(self, job, db_id, choices):

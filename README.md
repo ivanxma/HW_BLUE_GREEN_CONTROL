@@ -25,7 +25,7 @@ Green can temporarily be made writable for reviewed changes. Its schema must rem
 
 ## Installation
 
-The Compute deployment target is **Oracle Linux 9**. macOS scripts are retained for local development.
+**Oracle Linux 9 is the only tested and supported platform.**
 
 ```bash
 git clone https://github.com/ivanxma/HW_BLUE_GREEN_CONTROL.git bluegreen_control
@@ -45,6 +45,6 @@ Open `https://<compute-address>`. Sign in as `admin` with initial password `Chan
 
 - Side-by-side Blue/Green details, live SQL version/mode/GTIDs, and searchable Variables and Status tables.
 - Reviewed HA, event and replication-channel handling, with paginated work requests and persistent activity history.
-- Standard OCI updates by default for HA, creation and switchover; ETag protection remains selectable.
+- Standard OCI requests for HA, read/write controls, creation, switchover and replication-channel updates.
 
 The diagram uses illustrative networking and official OCI symbols. Oracle styling does not imply endorsement. Reports, credentials and generated runtime data stay outside Git.

@@ -47,7 +47,7 @@ class SimulatedOCI(DemoService):
         next(db for db in self.systems if db['id']==db_id).update(options)
         return self.response()
 
-    def set_channel(self, channel_id, enabled):
+    def set_channel(self, channel_id, enabled, **options):
         next(c for c in self.channel_list if c['id']==channel_id)['is_enabled']=enabled
         return self.response()
 
@@ -126,7 +126,7 @@ def test_full_ha_creation_event_restoration_and_switch(tmp_path):
     target=review(observer.events('demo-green'),'DISABLE')
     target['choices'][0]['after']='ENABLE'
     source=review(observer.events('demo-blue'),'KEEP')
-    params={'wait_seconds':300,'enable_ha':True,'ha_configuration_id':'demo-config','activate_channels':True,
+    params={'compartment_id':'demo-compartment','wait_seconds':300,'enable_ha':True,'ha_configuration_id':'demo-config','activate_channels':True,
             'source_event_review':source,'target_event_review':target}
     job=store.start('demo-deployment','switchover',params)
     workflow.run(job,'switchover','demo-deployment',params)
@@ -173,8 +173,8 @@ def test_sdk_payloads_use_supported_models_and_keep_password_server_side():
     assert 'vault-password-only-server-side' not in str(p)
     service.db=Mock()
     service.db.base_client.session.headers={}
-    service.db.get_db_system.return_value=SimpleNamespace(data=oci.mysql.models.DbSystem(id='db'),headers={'etag':'test-etag'})
-    service.update_db('db',database_mode='READ_ONLY')
+    service.db.get_db_system.return_value=SimpleNamespace(data=oci.mysql.models.DbSystem(id='db',compartment_id='comp',lifecycle_state='ACTIVE'),headers={})
+    service.update_db('db',expected_compartment='comp',database_mode='READ_ONLY')
     assert service.db.update_db_system.call_args.args[1].database_mode=='READ_ONLY'
 
 

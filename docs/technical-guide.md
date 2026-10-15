@@ -50,15 +50,6 @@ Use `--read-only` to permit discovery and registration while blocking managed-re
 
 Keep MySQL-aware backups of the registration database and protected deployment configuration. A binary rollback does not imply a MySQL datadir downgrade is supported.
 
-### Local development on macOS
-
-```bash
-./setup.sh --platform macos --mode none
-BLUEGREEN_DEMO=1 PORT=5088 .venv/bin/python app.py
-```
-
-Open `http://127.0.0.1:5088`. Demo resources are synthetic and cloud actions are disabled. Local login still uses the embedded MySQL account and first-login password rotation. OL9 is the Compute deployment path; other Linux deployment scripts are not included.
-
 ### Compartment-scoped IAM
 
 Match only the administration VM in a dynamic group, for example:
@@ -157,7 +148,7 @@ The menus are Blue/Green Deployment, DB Systems and Activity history. Both serve
 
 Normal status text is green, active work is orange and failures are red. Blue/Green server names have their role color. A top banner shows operation progress and failures. The latest or active operation is displayed alongside deployment details; Activity history retains the complete journal. Work requests include the selected system and its related deployment resources.
 
-HA changes, creation and switchover default to **Standard** DB-system updates. Standard checks fresh ACTIVE state, compartment and unchanged details, then sends each update once without `If-Match`. Explicit ETag mode adds an atomic OCI version check and retries only bounded, verified ETag conflicts; it never silently falls back. Standalone read/write actions and channel updates retain their protected defaults.
+All operations use **Standard OCI requests**. DB-system updates check fresh ACTIVE state, the selected compartment and unchanged details before submission. Channel updates also check the selected compartment, a settled lifecycle state and unchanged details. Each update is sent once without an atomic version condition or automatic mutation retries. Another client can still change a resource between the check and submission. The confirmation dialog lists changes without an update-mode selector. See [the former ETag behavior, examples and removal rationale](../doc/etag-usage.md).
 
 Run one application worker. Restarting during a workflow marks it interrupted; a timeout/restart does not cancel an OCI request already submitted. Inspect the work request and journal before retrying. Completed changes are retained, with no automatic rollback or replay. Credentials and reports are excluded from Git.
 

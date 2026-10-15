@@ -202,22 +202,9 @@ function modal(title, content) { $('#modal-title').textContent=title; $('#modal-
 function modalError(e) { $('#modal-error').textContent=e.message; $('#modal-error').hidden=false; message(e.message,'red'); }
 function submitForm(handler) { $('#modal-body form').addEventListener('submit', async e => {e.preventDefault(); const button=e.submitter; button.disabled=true; try {await handler(new FormData(e.target),e.target);} catch(err){modalError(err);} finally {button.disabled=false;} }); }
 async function queued(path,params,onSuccess) {
- let plan=await api('/api/operation-plan',{path,params});
+ const plan=await api('/api/operation-plan',{path,params});
  const previousTitle=$('#modal-title').textContent,previousNodes=[...$('#modal-body').childNodes],wasOpen=$('#modal').open;
- modal('Confirm · '+plan.title,`<p class="small muted resource-id">Compartment: ${esc(plan.compartment_id)}</p><ol class="operation-changes">${plan.changes.map(c=>`<li><span class="small muted">${esc(c.service)}</span><strong>${esc(c.action)}</strong><span>${esc(c.resource)}</span>${c.detail?`<p class="small muted">${esc(c.detail)}</p>`:''}</li>`).join('')||'<li>No resource changes are planned.</li>'}</ol>${plan.supports_db_update_mode?`<div class="form-section">${select('DB-system update mode','db_update_mode',[['STANDARD','Standard OCI update · without If-Match'+(plan.default_db_update_mode==='STANDARD'?' (default)':'')],['ETAG','ETag protected'+(plan.default_db_update_mode==='ETAG'?' (default)':'')]],plan.db_update_mode)}<p class="small muted">Standard mode uses the documented API without the optional If-Match header. ETag protection remains available as an explicit choice. This choice applies only to DB-system updates in this operation.</p><p id="db-update-mode-warning" class="notice" ${plan.db_update_mode==='STANDARD'?'':'hidden'}>Standard mode has no atomic ETag version check. The application checks the selected compartment and unchanged ACTIVE state before each update, but cannot prevent another OCI client changing the resource between the check and update. Each update is sent once and this choice is logged.</p></div>`:''}<div class="operation-checks"><h3>Execution checks</h3><ul>${plan.checks.map(c=>`<li>${esc(c)}</li>`).join('')}</ul></div><p class="small muted">Current state is checked again during execution. Changes run only after confirmation.</p><div class="form-footer"><button type="button" id="cancel-operation">Cancel</button><button type="button" id="confirm-operation" class="primary" ${!plan.execution_allowed?'disabled':''}>Confirm and execute</button></div>${!plan.execution_allowed?'<p class="small muted">Execution is disabled in this operating mode.</p>':''}`);
- if(plan.supports_db_update_mode)params={...params,db_update_mode:plan.db_update_mode};
- if(plan.supports_db_update_mode)$('[name=db_update_mode]').addEventListener('change',async e=>{
-  const selector=e.currentTarget,confirm=$('#confirm-operation'),cancel=$('#cancel-operation');
-  selector.disabled=true;confirm.disabled=true;cancel.disabled=true;
-  try {
-   const next={...params,db_update_mode:selector.value};
-   const preview=await api('/api/operation-plan',{path,params:next});
-   plan=preview;params=next;
-   $('.operation-checks ul').innerHTML=plan.checks.map(c=>`<li>${esc(c)}</li>`).join('');
-   $('#db-update-mode-warning').hidden=plan.db_update_mode!=='STANDARD';$('#modal-error').hidden=true;
-  }catch(error){selector.value=plan.db_update_mode;modalError(error);}
-  finally{selector.disabled=false;confirm.disabled=!plan.execution_allowed;cancel.disabled=false;}
- });
+ modal('Confirm · '+plan.title,`<p class="small muted resource-id">Compartment: ${esc(plan.compartment_id)}</p><ol class="operation-changes">${plan.changes.map(c=>`<li><span class="small muted">${esc(c.service)}</span><strong>${esc(c.action)}</strong><span>${esc(c.resource)}</span>${c.detail?`<p class="small muted">${esc(c.detail)}</p>`:''}</li>`).join('')||'<li>No resource changes are planned.</li>'}</ol><div class="operation-checks"><h3>Execution checks</h3><ul>${plan.checks.map(c=>`<li>${esc(c)}</li>`).join('')}</ul></div><p class="small muted">Current state is checked again during execution. Changes run only after confirmation.</p><div class="form-footer"><button type="button" id="cancel-operation">Cancel</button><button type="button" id="confirm-operation" class="primary" ${!plan.execution_allowed?'disabled':''}>Confirm and execute</button></div>${!plan.execution_allowed?'<p class="small muted">Execution is disabled in this operating mode.</p>':''}`);
  $('#cancel-operation').addEventListener('click',()=>{if(wasOpen){$('#modal-title').textContent=previousTitle;$('#modal-body').replaceChildren(...previousNodes);$('#modal-error').hidden=true;}else $('#modal').close();});
  $('#confirm-operation').addEventListener('click',async e=>{
   e.currentTarget.disabled=true;

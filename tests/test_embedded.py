@@ -13,5 +13,5 @@ def test_official_release_parser_does_not_use_test_archives():
 
 
 def test_current_calendar_release_version_is_supported():
-    assert version('mysqld Ver 26.7.0 for macos15 on arm64')=='26.7.0'
+    assert version('mysqld Ver 26.7.0 for Linux on aarch64')=='26.7.0'
     assert version('MySQL Shell 26.7.1')=='26.7.1'

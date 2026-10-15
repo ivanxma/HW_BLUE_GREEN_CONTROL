@@ -29,13 +29,14 @@ def release_packages(html):
 
 
 def discover(component, platform, machine=None):
+    if platform != 'ol9':
+        raise ValueError('Only Oracle Linux 9 is supported')
     machine = machine or host_platform.machine()
     arm = machine in {'arm64', 'aarch64'}
     if machine not in {'arm64','aarch64','x86_64','amd64'}:
         raise ValueError('Supported architectures are ARM64 and x86_64')
     product = 'mysql' if component == 'server' else 'shell'
-    os_id = '33' if platform == 'macos' else '2'
-    url = f'https://dev.mysql.com/downloads/{product}/?os={os_id}'
+    url = f'https://dev.mysql.com/downloads/{product}/?os=2'
     with urllib.request.urlopen(url, timeout=30) as response:
         html = response.read().decode()
     packages = release_packages(html)
@@ -43,8 +44,6 @@ def discover(component, platform, machine=None):
         name = package['filename']
         if component == 'server' and name.startswith('mysql-shell'):
             return False
-        if platform == 'macos':
-            return 'macos' in name and ('arm64' in name if arm else ('x86_64' in name or 'x86-64bit' in name))
         return 'linux-glibc2.28' in name and (('aarch64' in name or 'arm-64bit' in name) if arm else ('x86_64' in name or 'x86-64bit' in name))
     packages = [p for p in packages if compatible(p)]
     if not packages:
@@ -71,6 +70,8 @@ def binary_environment():
 
 
 def install(component, platform):
+    if platform != 'ol9':
+        raise ValueError('Only Oracle Linux 9 is supported')
     prefix = 'BLUEGREEN_MYSQL_SERVER' if component == 'server' else 'BLUEGREEN_MYSQLSH'
     override = os.environ.get(prefix + '_URL')
     if override:

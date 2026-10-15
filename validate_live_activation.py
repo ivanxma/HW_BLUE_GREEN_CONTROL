@@ -56,10 +56,8 @@ with tempfile.TemporaryDirectory(prefix='bg-live-check-') as directory:
     response=client.post('/api/operation-plan',json={'path':'/api/db/'+current['id']+'/action','params':{'action':'ha_off'}},headers={'X-CSRF-Token':csrf})
     check('Live operation preview is available',response.status_code==200 and response.json['execution_allowed'])
     check('Preview lists OCI changes without submitting them',response.json['will_mutate_oci'] and bool(response.json['changes']))
-    check('Default DB-system updates retain ETag protection',response.json['db_update_mode']=='ETAG')
-    response=client.post('/api/operation-plan',json={'path':'/api/db/'+current['id']+'/action','params':{'action':'ha_off','db_update_mode':'STANDARD'}},headers={'X-CSRF-Token':csrf})
-    check('Explicit standard OCI mode is available in the live preview',response.status_code==200 and response.json['execution_allowed'] and response.json['db_update_mode']=='STANDARD')
-    check('Standard mode preview discloses the missing atomic ETag check',any('no atomic ETag version check' in c for c in response.json['checks']))
+    check('Live preview uses Standard OCI requests',response.json['db_update_mode']=='STANDARD')
+    check('Preview states the single-submission checks',any('sending each update once' in c for c in response.json['checks']))
     check('Preview created no workflow or mutation job',not local.history())
 check('Verification used GET-only OCI requests',all(c['method']=='GET' for c in calls))
 report={'checks':checks,'mode':'LIVE','compartment_id':service.default_compartment,'region':service.region,

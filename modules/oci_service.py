@@ -11,11 +11,10 @@ import oci
 M = oci.mysql.models
 
 
-def db_update_mode(params, *, default='ETAG'):
-    mode = params.get('db_update_mode', default)
-    if mode not in ('ETAG', 'STANDARD'):
-        raise ValueError('Choose ETag-protected or standard OCI DB-system updates')
-    return mode
+def db_update_mode(params):
+    if params.get('db_update_mode', 'STANDARD') != 'STANDARD':
+        raise ValueError('Only Standard OCI updates are supported. Refresh the page and review the operation again.')
+    return 'STANDARD'
 
 
 def visible_resources(resources):
@@ -351,83 +350,33 @@ class OCIService:
             time.sleep(5)
         raise TimeoutError(f'Work request {request_id} timed out; OCI operation may still be running')
 
-    @staticmethod
-    def _conditional_update(client, read, update, resource_id, details, max_attempts=3):
-        # Avoid representation-specific gzip validators. Never strip or invent
-        # an ETag: even an inconsistent service must retain If-Match protection.
-        client.base_client.session.headers['Accept-Encoding'] = 'identity'
-        client.base_client.session.headers['Cache-Control'] = 'no-cache, no-store'
-        client.base_client.session.headers['Pragma'] = 'no-cache'
-        previous = read(resource_id)
-        baseline = oci.util.to_dict(previous.data)
-        attempts = []
-        def stopped(message):
-            error = RuntimeError(message)
-            error.etag_attempts = attempts
-            return error
-        for attempt in range(max_attempts):
-            etag = previous.headers.get('etag')
-            if not etag:
-                raise stopped('OCI returned no ETag; update was not submitted. Refresh the resource before retrying.')
-            record = {'attempt': attempt + 1, 'etag': etag,
-                      'get_request_id': previous.headers.get('opc-request-id')}
-            attempts.append(record)
-            try:
-                # A retry must first fetch a new validator and recheck the data;
-                # an SDK transport retry would reuse the rejected validator.
-                response = update(resource_id, details, if_match=etag,
-                                  retry_strategy=oci.retry.NoneRetryStrategy())
-                record.update(status=response.status, request_id=response.headers.get('opc-request-id'),
-                              work_request=response.headers.get('opc-work-request-id'))
-                response.etag_attempts = attempts
-                return response
-            except oci.exceptions.ServiceError as exc:
-                record.update(status=exc.status, code=exc.code, request_id=exc.request_id)
-                exc.etag_attempts = attempts
-                if exc.status != 412 or exc.code != 'NoEtagMatch':
-                    raise
-                if attempt + 1 < max_attempts:
-                    time.sleep(min(0.25 * 2 ** attempt, 2))
-                # Check even after the last rejected request: do not describe
-                # changed resource details as inconsistent service validators.
-                previous = read(resource_id)
-                if oci.util.to_dict(previous.data) != baseline:
-                    raise stopped(
-                        'OCI 412 NoEtagMatch: resource details changed during the update. '
-                        'Further updates were stopped. Refresh and review the new configuration before retrying; '
-                        f'request ID {exc.request_id or "unavailable"}') from exc
-                if attempt + 1 == max_attempts:
-                    raise stopped(
-                        f'OCI 412 NoEtagMatch: conditional update rejected after {max_attempts} fresh ETag attempts '
-                        'with unchanged resource details. OCI is rejecting its returned validators. '
-                        'ETag protection remains enabled; no unconditional update was attempted. '
-                        'Provide the recorded GET and update request IDs to Oracle Support; '
-                        f'request ID {exc.request_id or "unavailable"}') from exc
+    def update_db(self, db_id, *, db_update_mode='STANDARD', expected_compartment=None, **options):
+        if db_update_mode != 'STANDARD':
+            raise ValueError('Only Standard OCI updates are supported')
+        if not expected_compartment:
+            raise ValueError('Standard OCI updates require an explicit selected compartment')
+        baseline = self.db_system(db_id)
+        if baseline.get('compartment_id') != expected_compartment:
+            raise ValueError('DB system is outside the selected compartment')
+        if baseline.get('lifecycle_state') != 'ACTIVE':
+            raise ValueError('Wait for the DB system to become active')
+        if self.db_system(db_id) != baseline:
+            raise ValueError('DB system details changed before the standard OCI update; refresh and review again')
+        return self.db.update_db_system(db_id, M.UpdateDbSystemDetails(**options),
+                                        retry_strategy=oci.retry.NoneRetryStrategy())
 
-    def update_db(self, db_id, *, db_update_mode='ETAG', expected_compartment=None, **options):
-        if db_update_mode not in ('ETAG', 'STANDARD'):
-            raise ValueError('Unsupported DB-system update mode')
-        if db_update_mode == 'STANDARD':
-            # Explicit operator choice, matching the API's optional If-Match
-            # contract. This is never an automatic response to a failed update.
-            if not expected_compartment:
-                raise ValueError('Standard OCI updates require an explicit selected compartment')
-            self.db.base_client.session.headers['Accept-Encoding'] = 'identity'
-            baseline = self.db_system(db_id)
-            if baseline.get('compartment_id') != expected_compartment:
-                raise ValueError('DB system is outside the selected compartment')
-            if baseline.get('lifecycle_state') != 'ACTIVE':
-                raise ValueError('Wait for the DB system to become active')
-            if self.db_system(db_id) != baseline:
-                raise ValueError('DB system details changed before the standard OCI update; refresh and review again')
-            return self.db.update_db_system(db_id, M.UpdateDbSystemDetails(**options),
-                                            retry_strategy=oci.retry.NoneRetryStrategy())
-        return self._conditional_update(self.db, self.db.get_db_system, self.db.update_db_system,
-                                        db_id, M.UpdateDbSystemDetails(**options), max_attempts=12)
-
-    def set_channel(self, channel_id, enabled):
-        return self._conditional_update(self.ch, self.ch.get_channel, self.ch.update_channel,
-                                        channel_id, M.UpdateChannelDetails(is_enabled=enabled))
+    def set_channel(self, channel_id, enabled, *, expected_compartment):
+        if not expected_compartment:
+            raise ValueError('Channel updates require an explicit selected compartment')
+        baseline = self.channel(channel_id)
+        if baseline.get('compartment_id') != expected_compartment:
+            raise ValueError('Channel is outside the selected compartment')
+        if baseline.get('lifecycle_state') not in {'ACTIVE', 'INACTIVE', 'NEEDS_ATTENTION', 'FAILED'}:
+            raise ValueError('Wait for the channel to finish its current operation')
+        if self.channel(channel_id) != baseline:
+            raise ValueError('Channel details changed before the standard OCI update; refresh and review again')
+        return self.ch.update_channel(channel_id, M.UpdateChannelDetails(is_enabled=enabled),
+                                      retry_strategy=oci.retry.NoneRetryStrategy())
 
     def delete_channel(self, channel_id):
         return self.ch.delete_channel(channel_id)

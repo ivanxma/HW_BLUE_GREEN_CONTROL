@@ -576,7 +576,7 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
             raise ValueError('Complete all required creation fields')
         params = {k: value[k] for k in required}
         params['compartment_id'] = compartment()
-        params['db_update_mode'] = db_update_mode(value, default='STANDARD')
+        params['db_update_mode'] = db_update_mode(value)
         for key in ['mysql_version', 'shape_name', 'configuration_id', 'blue_ha_configuration_id', 'promoted_ha_configuration_id']:
             if value.get(key):
                 params[key] = str(value[key]).strip()
@@ -605,7 +605,7 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         params = {}
         if action == 'switchover':
             params = {'wait_seconds': int(value.get('wait_seconds', 300)),
-                      'db_update_mode': db_update_mode(value, default='STANDARD'), 'compartment_id': compartment(),
+                      'db_update_mode': db_update_mode(value), 'compartment_id': compartment(),
                       'enable_ha': value.get('enable_ha') is True, 'activate_channels': value.get('activate_channels') is True,
                       'ha_configuration_id': str(value.get('ha_configuration_id') or '').strip()}
             if not 1 <= params['wait_seconds'] <= 3600:
@@ -629,7 +629,7 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         if action not in allowed:
             raise ValueError('Unsupported DB action')
         params = dict(allowed[action])
-        params.update(db_update_mode=db_update_mode(value, default='STANDARD' if action in {'ha_on','ha_off'} else 'ETAG'), compartment_id=compartment())
+        params.update(db_update_mode=db_update_mode(value), compartment_id=compartment())
         if action == 'ha_on':
             params['configuration_id'] = str(value.get('configuration_id') or db['configuration_id']).strip()
         return jsonify(job_id=workflow.submit('update_db', db_id, params)), 202
@@ -645,7 +645,7 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         action = request.get_json().get('action')
         if action not in {'disable_channel', 'enable_channel', 'delete_channel'}:
             raise ValueError('Unsupported channel action')
-        return jsonify(job_id=workflow.submit(action, channel_id, {})), 202
+        return jsonify(job_id=workflow.submit(action, channel_id, {'compartment_id':compartment()})), 202
 
     @app.get('/api/work-requests/<request_id>')
     @protected

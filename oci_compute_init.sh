@@ -4,6 +4,9 @@ set -euo pipefail
 APP_REPO="${APP_REPO:-https://github.com/ivanxma/HW_BLUE_GREEN_CONTROL.git}"
 OS_FAMILY="${OS_FAMILY:-ol9}"
 [[ "$OS_FAMILY" == ol9 ]] || { echo "Compute deployment requires Oracle Linux 9" >&2; exit 2; }
+[[ -f /etc/os-release ]] || { echo "Compute deployment requires Oracle Linux 9" >&2; exit 2; }
+source /etc/os-release
+[[ "$ID" == ol && "${VERSION_ID%%.*}" == 9 ]] || { echo "Compute deployment requires Oracle Linux 9" >&2; exit 2; }
 default_user=opc
 APP_USER="${APP_USER:-$default_user}"
 APP_DIR="${APP_DIR:-/home/$APP_USER/heatwave-console}"

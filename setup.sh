@@ -12,12 +12,11 @@ while [[ $# -gt 0 ]]; do
     --service-user) service_user="$2"; shift 2;;
     --read-only) setup_read_only=1; shift;;
     --execute-oci) setup_read_only=0; shift;;
-    *) echo "Usage: setup.sh [--platform ol9|macos] [--mode none|http|https] [--host HOST] [--port PORT] [--service-user USER] [--read-only|--execute-oci]" >&2; exit 2;;
+    *) echo "Usage: setup.sh [--platform ol9] [--mode none|http|https] [--host HOST] [--port PORT] [--service-user USER] [--read-only|--execute-oci]" >&2; exit 2;;
   esac
 done
 if [[ -z "$platform" ]]; then
-  if [[ "$(uname)" == Darwin ]]; then platform=macos
-  elif [[ -f /etc/os-release ]]; then
+  if [[ -f /etc/os-release ]]; then
     source /etc/os-release
     case "$ID" in ol) platform="ol${VERSION_ID%%.*}";; *) echo 'Specify a supported platform' >&2; exit 2;; esac
   fi
@@ -26,7 +25,9 @@ if [[ -z "$setup_host" ]]; then [[ "$mode" == none ]] && setup_host=127.0.0.1 ||
 if [[ -z "$setup_port" ]]; then
   case "$mode" in https) setup_port=443;; http) setup_port=8080;; *) setup_port=5000;; esac
 fi
-[[ "$platform" =~ ^(ol9|macos)$ ]] || { echo 'Supported platforms: Oracle Linux 9 (deployment), macOS (local development)' >&2; exit 2; }
+[[ "$platform" == ol9 && -f /etc/os-release ]] || { echo 'Only Oracle Linux 9 is supported' >&2; exit 2; }
+source /etc/os-release
+[[ "$ID" == ol && "${VERSION_ID%%.*}" == 9 ]] || { echo 'Only Oracle Linux 9 is supported' >&2; exit 2; }
 [[ "$mode" =~ ^(none|http|https)$ ]] || { echo 'Unsupported mode' >&2; exit 2; }
 [[ "$setup_port" =~ ^[0-9]+$ ]] && ((setup_port > 0 && setup_port < 65536)) || { echo 'Invalid port' >&2; exit 2; }
 [[ "$service_user" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid service user' >&2; exit 2; }
@@ -81,7 +82,7 @@ if [[ "$mode" == https && (! -f tls/server.crt || ! -f tls/server.key) ]]; then
   chmod 600 tls/server.key
   echo 'Replace the generated certificate with a trusted certificate for external access.'
 fi
-if [[ "$mode" != none && "$platform" != macos && "${SKIP_PRIVILEGED_SETUP:-0}" != 1 ]]; then
+if [[ "$mode" != none && "${SKIP_PRIVILEGED_SETUP:-0}" != 1 ]]; then
  .venv/bin/python - "$PWD" "$mode" "$service_user" <<'PY'
 import subprocess,sys
 from pathlib import Path
@@ -141,7 +142,7 @@ subprocess.run(['sudo','systemctl','restart',service],check=True)
 PY
  platform_open_firewall "$setup_port"
 fi
-if [[ "$mode" == none && "$platform" != macos && "${SKIP_PRIVILEGED_SETUP:-0}" != 1 ]]; then
+if [[ "$mode" == none && "${SKIP_PRIVILEGED_SETUP:-0}" != 1 ]]; then
   sudo systemctl disable --now heatwave-bluegreen-http.service heatwave-bluegreen-https.service 2>/dev/null || true
 fi
 if [[ "${BLUEGREEN_DEPENDENCY_AUDIT:-on}" != off ]]; then

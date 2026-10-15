@@ -7,6 +7,7 @@ from .ha_configuration import promotion_configuration
 
 def build_plan(service, store, compartment, path, params, review):
     plan={'title':'Review operation','compartment_id':compartment,'changes':[],
+          'db_update_mode':db_update_mode(params),
           'checks':['The workflow rechecks current resource state before applying changes.'],
           'will_mutate_oci':False,'will_mutate_sql':False}
     def add(resource,action,detail='',kind='MySQL HeatWave'):
@@ -122,18 +123,6 @@ def build_plan(service, store, compartment, path, params, review):
             final_events(green['id'],params.get('target_event_review'))
         else:raise ValueError('Unsupported deployment action')
     else:raise ValueError('Unsupported operation preview')
-    standard_default = path == '/api/create' or (params.get('action') in {'ha_on','ha_off'} and bool(re.fullmatch(r'/api/db/[^/]+/action', path))) or (params.get('action') == 'switchover' and bool(re.fullmatch(r'/api/deployments/[^/]+/action', path)))
-    plan['default_db_update_mode'] = 'STANDARD' if standard_default else 'ETAG'
-    mode = db_update_mode(params, default=plan['default_db_update_mode'])
-    plan['supports_db_update_mode'] = (path == '/api/create' or
-        bool(re.fullmatch(r'/api/db/[^/]+/action', path) and params.get('action') in {'ha_off','ha_on','read_only','read_write'}) or
-        bool(re.fullmatch(r'/api/deployments/[^/]+/action', path) and params.get('action') == 'switchover'))
-    plan['db_update_mode'] = mode
-    if mode == 'STANDARD' and not plan['supports_db_update_mode']:
-        raise ValueError('Standard OCI DB-system updates do not apply to this operation')
-    if plan['supports_db_update_mode']:
-        plan['checks'].append('DB-system updates: '+(
-            'STANDARD OCI — omit optional If-Match; no atomic ETag version check. Verify ACTIVE state, selected compartment and unchanged details immediately before each update. Send each update once; record this choice in history.'
-            if mode == 'STANDARD' else
-            'ETAG PROTECTED — OCI checks the resource version atomically. No automatic fallback to standard updates.'))
+    if plan['will_mutate_oci']:
+        plan['checks'].append('Standard OCI requests. DB-system and channel updates recheck the selected compartment, resource state and unchanged details before sending each update once.')
     return plan

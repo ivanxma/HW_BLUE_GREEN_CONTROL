@@ -27,10 +27,8 @@ changed=False
 try:
     auth.change_password('admin',BOOTSTRAP_PASSWORD,password);changed=True
     store.put(marker,{'source_id':'test-db','secret_id':'test-vault-reference','original_event_state':'ENABLED'})
-    platform='macos' if sys.platform=='darwin' else 'ol9'
-    env={**os.environ,'SKIP_PRIVILEGED_SETUP':'1' if platform=='macos' else '0','BLUEGREEN_DEPENDENCY_AUDIT':'off'}
-    args=[str(root/'setup.sh'),'--platform',platform,'--mode','none' if platform=='macos' else 'https']
-    if platform!='macos':args+=['--read-only']
+    env={**os.environ,'SKIP_PRIVILEGED_SETUP':'0','BLUEGREEN_DEPENDENCY_AUDIT':'off'}
+    args=[str(root/'setup.sh'),'--platform','ol9','--mode','https','--read-only']
     subprocess.run(args,cwd=root,env=env,check=True,
                    stdout=subprocess.DEVNULL)
     assert auth.authenticate('admin',password)

@@ -100,6 +100,8 @@ def stop():
 
 def provision(platform):
     # This command runs only from deployment setup, never from a web request.
+    if platform != 'ol9':
+        raise ValueError('Only Oracle Linux 9 is supported')
     write_config()
     existing = (DATA/'mysql/auto.cnf').exists()
     if CREDENTIALS.exists():
@@ -155,7 +157,7 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
     parser.add_argument('action',choices=['provision','start','stop','wait','install-shell','discover'])
-    parser.add_argument('--platform',choices=['ol9','macos'],default='macos' if os.uname().sysname=='Darwin' else 'ol9')
+    parser.add_argument('--platform',choices=['ol9'],default='ol9')
     args=parser.parse_args()
     if args.action=='provision':provision(args.platform)
     elif args.action=='start':start()

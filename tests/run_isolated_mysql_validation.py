@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory(prefix='bgv-') as directory:
     release=json.loads((runtime.ROOT/'.embedded/mysql-server/release.json').read_text())
     runtime.install=lambda *args:release
     try:
-        runtime.provision('macos' if sys.platform=='darwin' else 'ol9')
+        runtime.provision('ol9')
         environment={**os.environ,'BLUEGREEN_MYSQL_INTEGRATION':'1',
                      'BLUEGREEN_TEST_STORE_CONFIG':str(runtime.CREDENTIALS)}
         result=subprocess.run([sys.executable,'-m','pytest',*sys.argv[1:]],cwd=runtime.ROOT,env=environment)

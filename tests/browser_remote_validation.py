@@ -8,8 +8,12 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-BASE='https://132.145.60.181'
-OUTPUT=Path(__file__).resolve().parents[1]/'validation/ol9-132.145.60.181-20261014'
+BASE=os.environ['BLUEGREEN_TEST_BASE_URL'].rstrip('/')
+SSH_TARGET=os.environ['BLUEGREEN_TEST_SSH_TARGET']
+SSH_KEY=Path(os.environ['BLUEGREEN_TEST_SSH_KEY']).expanduser()
+KNOWN_HOSTS=Path(os.environ.get('BLUEGREEN_TEST_KNOWN_HOSTS',str(Path.home()/'.ssh/known_hosts'))).expanduser()
+APP_DIR=os.environ.get('BLUEGREEN_TEST_APP_DIR','/home/opc/heatwave-bluegreen')
+OUTPUT=Path(os.environ.get('BLUEGREEN_BROWSER_EVIDENCE',str(Path(__file__).resolve().parents[1]/'validation/ol9-remote')))
 OUTPUT.mkdir(parents=True,exist_ok=True)
 checks=[]
 rotation={'password':None}
@@ -30,9 +34,9 @@ x=c.cursor();x.execute("ALTER USER 'admin'@'localhost' IDENTIFIED BY %s",('Chang
 with s.db() as x:x.execute("UPDATE operators SET must_change_password=TRUE WHERE username='admin'")
 print('Fresh admin account restored; first-login rotation required.')
 """
-    subprocess.run(['ssh','-i',str(Path.home()/'key/id_rsa_bb.key'),'-o','IdentitiesOnly=yes',
-                    '-o','UserKnownHostsFile=/private/tmp/bluegreen-validation-known-hosts','opc@132.145.60.181',
-                    'cd /home/opc/heatwave-bluegreen && .venv/bin/python -c '+shlex.quote(code)],
+    subprocess.run(['ssh','-i',str(SSH_KEY),'-o','IdentitiesOnly=yes',
+                    '-o','UserKnownHostsFile='+str(KNOWN_HOSTS),SSH_TARGET,
+                    'cd '+shlex.quote(APP_DIR)+' && .venv/bin/python -c '+shlex.quote(code)],
                    input=json.dumps({'password':rotation['password']}),text=True,check=True,capture_output=True)
     rotation['password']=None
 
@@ -61,7 +65,7 @@ try:
         page.get_by_label('Password',exact=False).fill(password)
         page.get_by_role('button',name='Sign in',exact=True).click()
         page.get_by_role('heading',name='Blue Green Control Room',exact=True).wait_for()
-        # Discovery is read-only and may inspect many accessible compartments.
+        # Discovery is read-only and confined to the selected compartment.
         response=context.request.get(BASE+'/api/dashboard',timeout=120000)
         data=response.json();check('Live OCI dashboard discovery',response.status==200,str(data.get('error','')))
         check('Default scope is the VM compartment',data['compartment_id']==data['default_compartment_id'])
