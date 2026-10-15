@@ -18,6 +18,8 @@ from modules.store import Store
 from modules.workflow import Workflow
 from modules.operation_plan import build_plan
 from modules.ha_configuration import promotion_configuration
+from modules.resource_actions import (DB_LIFECYCLE_ACTIONS, confirmation_snapshot, db_actions,
+    deployment_actions, db_lifecycle_blocker, deployment_delete_blocker, require_allowed, switchover_blocker)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -338,6 +340,7 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         return channels
 
     def configuration_details(panel):
+        panel['lifecycle_actions'] = db_actions(panel['db_system'])
         try:
             panel['configuration'] = runtime()[0].configuration(panel['db_system'])
         except Exception as exc:
@@ -349,10 +352,18 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
     def detail(deployment_id):
         service, observer, _ = runtime()
         deployment = scoped_deployment(deployment_id)
-        panels = {}
+        panels, panel_information = {}, {}
         for side, db_id in [('blue', deployment['source_db_system_id']), ('green', deployment.get('target_db_system_id'))]:
             if db_id:
-                panel = {'db_system': scoped_db(db_id), 'telemetry_available': False}
+                try:
+                    db = scoped_db(db_id)
+                    if db.get('lifecycle_state') == 'DELETED':
+                        panel_information[side] = 'DB system has been deleted.'
+                        continue
+                except Exception as exc:
+                    panel_information[side] = 'DB system unavailable: ' + public_error(exc)
+                    continue
+                panel = {'db_system': db, 'telemetry_available': False}
                 try:
                     panel.update(observer.sample(db_id))
                     panel['telemetry_available'] = True
@@ -400,6 +411,7 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         except ValueError:
             ha_default = None
         return jsonify(deployment=deployment, panels=panels, plan=plan, promotion_ha_default=ha_default,
+                       actions=deployment_actions(deployment), panel_information=panel_information,
                        verification=store.get('verification:' + deployment_id))
 
     @app.get('/api/db/<db_id>')
@@ -491,6 +503,32 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
     def ha_configurations(db_id):
         return jsonify(runtime()[0].ha_configurations(scoped_db(db_id)))
 
+    @app.get('/api/db/<db_id>/configuration-editor')
+    @protected
+    def configuration_editor(db_id):
+        return jsonify(runtime()[0].configuration_editor(scoped_db(db_id)))
+
+    @app.post('/api/db/<db_id>/configuration-versions')
+    @protected
+    def configuration_version(db_id):
+        service, _, workflow = live()
+        db = scoped_db(db_id)
+        value = request.get_json()
+        service.configuration_draft(db, value)
+        snapshot = confirmed_resource(value, db)
+        params = {k: value.get(k) for k in ['source_configuration_id', 'display_name', 'variables', 'acknowledge_removal']}
+        params.update(compartment_id=compartment(), expected_resource=snapshot)
+        return jsonify(job_id=workflow.submit('create_configuration', db_id, params)), 202
+
+    @app.get('/api/configuration-result/<job_id>')
+    @protected
+    def configuration_result(job_id):
+        job = next((j for j in store.history() if j['id'] == job_id and j['kind'] == 'create_configuration'
+                    and j['params'].get('compartment_id') == compartment()), None)
+        if not job:
+            raise ValueError('Configuration operation is unavailable in the selected compartment')
+        return jsonify(status=job['status'], configuration=store.get('configuration-result:' + job_id))
+
     @app.get('/api/db/<db_id>/sql/<kind>')
     @protected
     def sql_global_values(db_id, kind):
@@ -564,7 +602,33 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         result = build_plan(service, store, compartment(), value.get('path',''), value['params'], reviewed)
         result['execution_allowed'] = not service.demo and (not app.config['OCI_READ_ONLY'] or
                                     not (result['will_mutate_oci'] or result['will_mutate_sql']))
+        snapshot = result.pop('confirmation_resource', None)
+        if snapshot is not None:
+            with state_lock:
+                confirmations = record().setdefault('confirmations', {})
+                now = time.time()
+                for token, entry in list(confirmations.items()):
+                    if now - entry['created'] > 600:
+                        confirmations.pop(token)
+                while len(confirmations) >= 20:
+                    confirmations.pop(next(iter(confirmations)))
+                token = secrets.token_urlsafe(32)
+                confirmations[token] = {'created': now, 'path': value['path'], 'params': value['params'],
+                                        'compartment': compartment(), 'resource': snapshot}
+                result['confirmation_token'] = token
         return jsonify(result)
+
+    def confirmed_resource(value, resource):
+        with state_lock:
+            entry = record().setdefault('confirmations', {}).pop(value.get('confirmation_token'), None)
+        params = {k: v for k, v in value.items() if k not in {'confirmation_token', 'confirmed'}}
+        if (value.get('confirmed') is not True or not entry or time.time() - entry['created'] > 600
+                or entry['path'] != request.path or entry['compartment'] != compartment()
+                or entry['params'] != params):
+            raise ValueError('Review and confirm this action before execution. The confirmation may have expired.')
+        if entry['resource'] != confirmation_snapshot(resource):
+            raise ValueError('Resource changed since review; refresh and confirm the action again')
+        return entry['resource']
 
     @app.post('/api/create')
     @protected
@@ -597,13 +661,18 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         deployment = scoped_deployment(deployment_id)
         value = request.get_json()
         action = value.get('action')
-        if action not in {'precheck', 'switchover', 'activate_copies'}:
+        if action not in {'precheck', 'switchover', 'activate_copies', 'delete'}:
             raise ValueError('Unsupported deployment action')
+        if action == 'delete':
+            require_allowed(deployment_delete_blocker(deployment))
+            params = {'compartment_id': compartment(), 'expected_resource': confirmed_resource(value, deployment)}
+            return jsonify(job_id=workflow.submit('delete_deployment', deployment_id, params)), 202
         for member in ['source_db_system_id', 'target_db_system_id']:
             if deployment.get(member):
                 scoped_db(deployment[member])
         params = {}
         if action == 'switchover':
+            require_allowed(switchover_blocker(deployment))
             params = {'wait_seconds': int(value.get('wait_seconds', 300)),
                       'db_update_mode': db_update_mode(value), 'compartment_id': compartment(),
                       'enable_ha': value.get('enable_ha') is True, 'activate_channels': value.get('activate_channels') is True,
@@ -621,6 +690,17 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         db = scoped_db(db_id)
         value = request.get_json()
         action = value.get('action')
+        if action in DB_LIFECYCLE_ACTIONS:
+            require_allowed(db_lifecycle_blocker(db, action))
+            params = {'action': action, 'compartment_id': compartment(),
+                      'expected_resource': confirmed_resource(value, db)}
+            kind = action + '_db' if action in {'start', 'stop', 'delete'} else action
+            return jsonify(job_id=workflow.submit(kind, db_id, params)), 202
+        if action == 'configuration':
+            config = service.validate_configuration_apply(db, value.get('configuration_id'))
+            params = {'configuration_id': config['id'], 'compartment_id': compartment(),
+                      'expected_resource': confirmed_resource(value, db)}
+            return jsonify(job_id=workflow.submit('apply_configuration', db_id, params)), 202
         if action == 'events':
             params = {'event_review': reviewed(value.get('event_review'), db_id, 'switch')}
             return jsonify(job_id=workflow.submit('event_states', db_id, params)), 202

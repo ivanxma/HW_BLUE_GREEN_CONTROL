@@ -201,16 +201,21 @@ function syncWorkflowNotification(jobs) {
 function modal(title, content) { $('#modal-title').textContent=title; $('#modal-body').innerHTML=content; $('#modal-error').hidden=true; if (!$('#modal').open) $('#modal').showModal(); }
 function modalError(e) { $('#modal-error').textContent=e.message; $('#modal-error').hidden=false; message(e.message,'red'); }
 function submitForm(handler) { $('#modal-body form').addEventListener('submit', async e => {e.preventDefault(); const button=e.submitter; button.disabled=true; try {await handler(new FormData(e.target),e.target);} catch(err){modalError(err);} finally {button.disabled=false;} }); }
+function conversionGuidance(plan){
+ const g=plan.conversion_guidance;if(!g)return '';
+ return `<aside class="information" id="conversion-guidance"><h3>Before making Green read-write</h3><p>${esc(g.message)}</p><div class="table-wrap"><table><thead><tr><th>replica_type_conversions</th><th>When to consider it</th></tr></thead><tbody>${g.options.map(([name,description])=>`<tr><th scope="row">${esc(name)}</th><td>${esc(description)}</td></tr>`).join('')}</tbody></table></div><p class="small">${esc(g.note)}</p><p class="small"><a href="${esc(g.source)}" target="_blank" rel="noopener">MySQL type conversion rules</a></p><button type="button" id="review-conversion-configuration">Review Green configuration first</button><p class="small muted">You can also confirm read-write below and keep the current configuration.</p></aside>`;
+}
 async function queued(path,params,onSuccess) {
  const plan=await api('/api/operation-plan',{path,params});
  const previousTitle=$('#modal-title').textContent,previousNodes=[...$('#modal-body').childNodes],wasOpen=$('#modal').open;
- modal('Confirm · '+plan.title,`<p class="small muted resource-id">Compartment: ${esc(plan.compartment_id)}</p><ol class="operation-changes">${plan.changes.map(c=>`<li><span class="small muted">${esc(c.service)}</span><strong>${esc(c.action)}</strong><span>${esc(c.resource)}</span>${c.detail?`<p class="small muted">${esc(c.detail)}</p>`:''}</li>`).join('')||'<li>No resource changes are planned.</li>'}</ol><div class="operation-checks"><h3>Execution checks</h3><ul>${plan.checks.map(c=>`<li>${esc(c)}</li>`).join('')}</ul></div><p class="small muted">Current state is checked again during execution. Changes run only after confirmation.</p><div class="form-footer"><button type="button" id="cancel-operation">Cancel</button><button type="button" id="confirm-operation" class="primary" ${!plan.execution_allowed?'disabled':''}>Confirm and execute</button></div>${!plan.execution_allowed?'<p class="small muted">Execution is disabled in this operating mode.</p>':''}`);
+ modal('Confirm · '+plan.title,`<p class="small muted resource-id">Compartment: ${esc(plan.compartment_id)}</p>${conversionGuidance(plan)}<ol class="operation-changes">${plan.changes.map(c=>`<li><span class="small muted">${esc(c.service)}</span><strong>${esc(c.action)}</strong><span>${esc(c.resource)}</span>${c.detail?`<p class="small muted">${esc(c.detail)}</p>`:''}</li>`).join('')||'<li>No resource changes are planned.</li>'}</ol><div class="operation-checks"><h3>Execution checks</h3><ul>${plan.checks.map(c=>`<li>${esc(c)}</li>`).join('')}</ul></div><p class="small muted">Current state is checked again during execution. Changes run only after confirmation.</p><div class="form-footer"><button type="button" id="cancel-operation">Cancel</button><button type="button" id="confirm-operation" class="primary" ${!plan.execution_allowed?'disabled':''}>Confirm and execute</button></div>${!plan.execution_allowed?'<p class="small muted">Execution is disabled in this operating mode.</p>':''}`);
+ if(plan.conversion_guidance)$('#review-conversion-configuration').addEventListener('click',()=>configurationDialog(plan.conversion_guidance.db_system_id,'replica_type_conversions').catch(modalError));
  $('#cancel-operation').addEventListener('click',()=>{if(wasOpen){$('#modal-title').textContent=previousTitle;$('#modal-body').replaceChildren(...previousNodes);$('#modal-error').hidden=true;}else $('#modal').close();});
  $('#confirm-operation').addEventListener('click',async e=>{
   e.currentTarget.disabled=true;
   try {
    message('Submitting '+plan.title+'…','orange',{title:'Submitting operation'});
-   const result=await api(path,params);$('#modal').close();
+   const result=await api(path,plan.confirmation_token?{...params,confirmation_token:plan.confirmation_token,confirmed:true}:params);$('#modal').close();
    message(result.job_id?'Operation queued. Live progress appears here; View activity opens its execution details.':'Operation completed.',result.job_id?'orange':'green',{jobId:result.job_id});
    await refresh();if(onSuccess)await onSuccess(result);
   }catch(error){modalError(error);if($('#confirm-operation'))$('#confirm-operation').disabled=false;}
@@ -269,6 +274,13 @@ function resetFailedReadout(root){root?.querySelectorAll('[data-observation-erro
 
 let inspected=null,systemDetailVersion=0;
 const systemRequests=new Map();
+function operationBusy(){return inventory?.history.some(j=>['QUEUED','ACCEPTED','RUNNING','IN_PROGRESS'].includes(j.status));}
+function lifecycleControls(s){
+ const d=s.db_system,actions=s.lifecycle_actions||{},protection=d.deletion_policy?.is_delete_protected;
+ const labels=[['start','Start'],['stop','Stop'],...(protection===true?[['disable_delete_protection','Disable deletion protection']]:[]),['delete','Delete DB system']];
+ return `<div class="lifecycle-controls"><p class="small muted">Deletion protection: ${protection===true?'Enabled':protection===false?'Disabled':'Unverified'}</p><div class="actions"><button data-configure="${esc(d.id)}" ${mutationsDisabled||operationBusy()?'disabled':''}>Edit configuration</button>${labels.map(([action,label])=>`<button data-db="${esc(d.id)}" data-action="${action}" title="${esc(actions[action]?.reason||label)}" ${action==='delete'?'class="danger-action"':''} ${mutationsDisabled||operationBusy()||!actions[action]?.allowed?'disabled':''}>${label}</button>`).join('')}</div></div>`;
+}
+function disableDeploymentActions(reason){for(const id of ['switchover','delete-deployment','precheck']){setProperty('#'+id,'disabled',true);setProperty('#'+id,'title',reason);}}
 function systemShell() {
  return '<div id="db-pair"></div><div id="db-summary"><p class="muted">Loading DB system details…</p></div>'+detailTabMarkup('db','DB system details',systemKey(),true);
 }
@@ -284,7 +296,7 @@ async function showSystem(id) {
   const d=s.db_system,item=inventory.systems.find(x=>x.id===id),channels=(s.channels||[]).map(c=>({...c,health:c.health||inventory.channels.find(x=>x.id===c.id)?.health}));
   const context=s.blue_green_context;
   setHTML('#db-pair',`${context?`<div class="paired-environment"><p class="eyebrow">${esc(context.display_name||'BLUE GREEN ENVIRONMENT')}</p><div class="paired-servers">${context.members.map(member=>`<button class="paired-server ${member.role.toLowerCase()} ${member.selected?'selected':''}" data-related-db="${esc(member.id)}" aria-pressed="${Boolean(member.selected)}" title="View ${esc(member.role)} server" ${!member.available?'disabled':''}><span class="small">${esc(member.role)}${member.is_current_primary?' · CURRENT PRIMARY':''}</span><strong>${esc(member.display_name)}</strong><span class="small">${member.selected?'Selected · ':''}${esc(member.lifecycle_state||'Details unavailable')}${member.information?' · '+esc(member.information):''}</span></button>`).join('')}</div></div>`:''}${s.relationship_warning?`<div class="information">${esc(s.relationship_warning)}</div>`:''}`);
-  setHTML('#db-summary',`<div class="panel-title"><div><p class="eyebrow">${item?.blue_green_role?esc(item.blue_green_role)+' SERVER'+(item.is_current_primary?' · CURRENT PRIMARY':''):'DB SYSTEM DETAILS'}</p><h2 class="server-name ${item?.blue_green_role?.toLowerCase()||''}">${esc(d.display_name)}</h2></div>${badge(d.lifecycle_state,item?.tone)}</div><p class="small muted resource-id">${esc(d.id)}</p><div class="actions"><button data-observe="${esc(id)}">SQL access</button><button data-events="${esc(id)}">Events</button><button data-create="${esc(id)}" class="primary" ${!item?.eligible||mutationsDisabled?'disabled':''}>Create blue-green</button><button data-db="${esc(id)}" data-action="${d.is_highly_available?'ha_off':'ha_on'}" ${mutationsDisabled||d.lifecycle_state!=='ACTIVE'?'disabled':''}>${d.is_highly_available?'Disable HA':'Enable HA'}</button></div>${item?.creation_blockers?.length?`<div class="notice creation-blockers">${item.creation_blockers.map(esc).join('<br>')}</div>`:''}`);
+  setHTML('#db-summary',`<div class="panel-title"><div><p class="eyebrow">${item?.blue_green_role?esc(item.blue_green_role)+' SERVER'+(item.is_current_primary?' · CURRENT PRIMARY':''):'DB SYSTEM DETAILS'}</p><h2 class="server-name ${item?.blue_green_role?.toLowerCase()||''}">${esc(d.display_name)}</h2></div>${badge(d.lifecycle_state,item?.tone)}</div><p class="small muted resource-id">${esc(d.id)}</p><div class="actions"><button data-observe="${esc(id)}">SQL access</button><button data-events="${esc(id)}">Events</button><button data-create="${esc(id)}" class="primary" ${!item?.eligible||mutationsDisabled?'disabled':''}>Create blue-green</button><button data-db="${esc(id)}" data-action="${d.is_highly_available?'ha_off':'ha_on'}" ${mutationsDisabled||d.lifecycle_state!=='ACTIVE'?'disabled':''}>${d.is_highly_available?'Disable HA':'Enable HA'}</button></div>${lifecycleControls(s)}${item?.creation_blockers?.length?`<div class="notice creation-blockers">${item.creation_blockers.map(esc).join('<br>')}</div>`:''}`);
   renderServerDetails('db',s,channels,'db:'+key,true);
   await refreshSqlTab($('#db-tabview'));
   stampChanges(previous);
@@ -342,29 +354,35 @@ async function refresh() {
   syncWorkflowNotification(inventory.history);
   setProperty('#new-deployment','disabled',mutationsDisabled||!inventory.systems.some(s=>s.eligible)||activeJobs.length>0);
 
+  if(selected && inventory.registration_scope_verified!==false && !inventory.deployments.some(d=>d.id===selected && d.lifecycle_state!=='DELETED')){selected=null;detailData=null;setProperty('#selected','hidden',true);disableDeploymentActions('Deployment is no longer available.');}
   if(selected)await showDetail(selected);
   stampChanges(previous);
- } catch(e){clearLiveReadout($('#system-detail'),e.message);clearLiveReadout($('#panels'),e.message);message(e.message,'red');} finally{refreshing=false;}
+ } catch(e){disableDeploymentActions('Current deployment state could not be verified.');clearLiveReadout($('#system-detail'),e.message);clearLiveReadout($('#panels'),e.message);message(e.message,'red');} finally{refreshing=false;}
 }
 let deploymentPanelKey=null;
 async function showDetail(id) {
- selected=id;const compartment=inventory.compartment_id;let detail;try{detail=await api(`/api/deployments/${encodeURIComponent(id)}`);}catch(error){if(selected===id && inventory.compartment_id===compartment)clearLiveReadout($('#panels'),error.message);throw error;}resetFailedReadout($('#panels'));
+ if(selected!==id)disableDeploymentActions('Loading current deployment state…');
+ selected=id;const compartment=inventory.compartment_id;let detail;try{detail=await api(`/api/deployments/${encodeURIComponent(id)}`);}catch(error){if(selected===id && inventory.compartment_id===compartment){disableDeploymentActions('Current deployment state could not be verified.');clearLiveReadout($('#panels'),error.message);}throw error;}resetFailedReadout($('#panels'));
  if(selected!==id||inventory.compartment_id!==compartment)return;detailData=detail;
  setProperty('#selected','hidden',false);setText('#selected-title',detail.deployment.display_name);
  const busy=inventory?.history.some(j=>['QUEUED','ACCEPTED','RUNNING','IN_PROGRESS'].includes(j.status));
- ['precheck','switchover','activate-copies'].forEach(name=>setProperty('#'+name,'disabled',mutationsDisabled||busy));
+ for(const [id,action] of [['precheck','switchover'],['switchover','switchover'],['delete-deployment','delete']]){
+  const state=detail.actions?.[action];setProperty('#'+id,'disabled',mutationsDisabled||busy||!state?.allowed);setProperty('#'+id,'title',state?.reason||'');
+ }
+ setProperty('#activate-copies','disabled',mutationsDisabled||busy);
+ setText('#deployment-action-info',detail.actions?.switchover?.reason||'Blue is the current primary. Switchover is available after readiness checks.');
  const key=JSON.stringify([compartment,id,...['blue','green'].map(side=>detail.panels[side]?.db_system.id)]);
  if(deploymentPanelKey!==key){
   deploymentPanelKey=key;
   setHTML('#panels',['blue','green'].map(side=>{
    const panel=detail.panels[side],prefix='deployment-'+side;
-   return `<article id="${prefix}-panel" class="panel deployment-server ${side==='green'?'green-panel':''}" aria-label="${side==='blue'?'Blue':'Green'} DB system"><div id="${prefix}-summary"></div>${panel?detailTabMarkup(prefix,`${side==='blue'?'Blue':'Green'} DB system details`,`${compartment}:${id}:${side}:${panel.db_system.id}`):'<p class="muted">DB system is provisioning…</p>'}</article>`;
+   return `<article id="${prefix}-panel" class="panel deployment-server ${side==='green'?'green-panel':''}" aria-label="${side==='blue'?'Blue':'Green'} DB system"><div id="${prefix}-summary"></div>${panel?detailTabMarkup(prefix,`${side==='blue'?'Blue':'Green'} DB system details`,`${compartment}:${id}:${side}:${panel.db_system.id}`):`<p class="muted">${esc(detail.panel_information?.[side]||'DB system is provisioning…')}</p>`}</article>`;
   }).join(''));
  }
  for(const side of ['blue','green']){
   const panel=detail.panels[side];if(!panel)continue;
   const d=panel.db_system,prefix='deployment-'+side,item=inventory.systems.find(x=>x.id===d.id);
-  setHTML('#'+prefix+'-summary',`<div class="panel-title"><div><p class="eyebrow"><span class="role-chip ${side}">${side.toUpperCase()}</span> ${detail.deployment.active_db_system_id===d.id?'· CURRENT PRIMARY':''}</p><h3 class="server-name ${side}">${esc(d.display_name)}</h3></div>${badge(d.lifecycle_state,item?.tone)}</div><p class="small muted resource-id">${esc(d.id)}</p><div class="actions"><button data-observe="${esc(d.id)}">SQL access</button><button data-events="${esc(d.id)}">Events</button><button data-db="${esc(d.id)}" data-action="${d.is_highly_available?'ha_off':'ha_on'}" ${mutationsDisabled||d.lifecycle_state!=='ACTIVE'?'disabled':''}>${d.is_highly_available?'Disable HA':'Enable HA'}</button>${side==='green'?`<button data-db="${esc(d.id)}" data-action="${panel.database_mode==='READ_WRITE'?'read_only':'read_write'}" ${mutationsDisabled||!hasTelemetry(panel)||!panel.database_mode||d.lifecycle_state!=='ACTIVE'?'disabled':''}>${panel.database_mode==='READ_WRITE'?'Set read-only':'Allow read-write'}</button>`:''}</div>`);
+  setHTML('#'+prefix+'-summary',`<div class="panel-title"><div><p class="eyebrow"><span class="role-chip ${side}">${side.toUpperCase()}</span> ${detail.deployment.active_db_system_id===d.id?'· CURRENT PRIMARY':''}</p><h3 class="server-name ${side}">${esc(d.display_name)}</h3></div>${badge(d.lifecycle_state,item?.tone)}</div><p class="small muted resource-id">${esc(d.id)}</p><div class="actions"><button data-observe="${esc(d.id)}">SQL access</button><button data-events="${esc(d.id)}">Events</button><button data-db="${esc(d.id)}" data-action="${d.is_highly_available?'ha_off':'ha_on'}" ${mutationsDisabled||d.lifecycle_state!=='ACTIVE'?'disabled':''}>${d.is_highly_available?'Disable HA':'Enable HA'}</button>${side==='green'?`<button data-db="${esc(d.id)}" data-action="${panel.database_mode==='READ_WRITE'?'read_only':'read_write'}" ${mutationsDisabled||!hasTelemetry(panel)||!panel.database_mode||d.lifecycle_state!=='ACTIVE'?'disabled':''}>${panel.database_mode==='READ_WRITE'?'Set read-only':'Allow read-write'}</button>`:''}</div>${lifecycleControls(panel)}`);
   renderServerDetails(prefix,panel,panel.channels||[],`deployment:${compartment}:${id}:${side}`);
   const root=$('#'+prefix+'-tabview');activateDetailTab(root,systemTabs.get(root.dataset.tabKey)||'details',false,false);await refreshSqlTab(root);
  }
@@ -452,13 +470,74 @@ async function secretDialog() {
  submitForm(async f=>queued('/api/secrets',Object.fromEntries(f),v=>message('Secret created: '+v.secret_name+'. Reopen environment creation after it becomes active.')));
 }
 async function switchDialog() {
+ await showDetail(selected);
+ if(!detailData?.actions?.switchover?.allowed)throw Error(detailData?.actions?.switchover?.reason||'Switchover is unavailable');
  const d=detailData.deployment;
  const [source,target]=await Promise.all([api('/api/events/'+encodeURIComponent(d.source_db_system_id)),api('/api/events/'+encodeURIComponent(d.target_db_system_id))]);
  const originals=detailData.plan.original_events || source.events;
  const haCatalog=await api(`/api/db/${encodeURIComponent(d.target_db_system_id)}/ha-configurations`);
  modal('Switchover · event and promotion choices',`<form><p class="notice">Switchover moves the primary endpoint and may interrupt connections. Blue HA is disabled, Green becomes read-only for the handoff, and promoted Green must pass read-write and GTID verification.</p><div class="form-grid">${field('Replication drain wait (seconds)','wait_seconds',300,'number',true)}${select('Promoted HA configuration (optional override)','ha_configuration_id',[['','Reuse the registered / original HA configuration'],...haCatalog.configurations.map(c=>[c.id,c.display_name+' · '+c.id])])}</div><p class="small muted">Leave the HA configuration blank to reuse ${esc(detailData.promotion_ha_default?.source||'the existing configuration')}${detailData.promotion_ha_default?.configuration_id?': '+esc(detailData.promotion_ha_default.configuration_id):''}. Enter an OCID only to override it. HA is enabled only when selected below.</p>${check('Enable HA on promoted Green','enable_ha')}${check('Activate registered copied inbound channels','activate_channels')}<div class="form-section"><h3>Source event handling before switchover</h3><div id="source-events">${eventsMarkup(source,'source')}</div></div><div class="form-section"><h3>Green final event states after switchover</h3><div id="target-events">${eventsMarkup(target,'target',originals)}</div></div>${check('I reviewed event states and the endpoint handoff','events_reviewed')}${footer('Review switchover')}</form>`);
- submitForm(async f=>{if(!f.get('events_reviewed'))throw Error('Review event choices before switchover');await queued(`/api/deployments/${encodeURIComponent(selected)}/action`,{action:'switchover',wait_seconds:Number(f.get('wait_seconds')),ha_configuration_id:f.get('ha_configuration_id'),enable_ha:Boolean(f.get('enable_ha')),activate_channels:Boolean(f.get('activate_channels')),source_event_review:eventChoices($('#source-events'),source,'source'),target_event_review:eventChoices($('#target-events'),target,'target')});});
+ submitForm(async f=>{if(!f.get('events_reviewed'))throw Error('Review event choices before switchover');await queued(`/api/deployments/${encodeURIComponent(d.id)}/action`,{action:'switchover',wait_seconds:Number(f.get('wait_seconds')),ha_configuration_id:f.get('ha_configuration_id'),enable_ha:Boolean(f.get('enable_ha')),activate_channels:Boolean(f.get('activate_channels')),source_event_review:eventChoices($('#source-events'),source,'source'),target_event_review:eventChoices($('#target-events'),target,'target')});});
 }
+async function configurationDialog(id,focusVariable=null){
+ const data=await api(`/api/db/${encodeURIComponent(id)}/configuration-editor`),draft={...data.variables};
+ let page=1,query=focusVariable||'',removed=new Set();const size=10;
+ modal('Edit HeatWave configuration',`<p><strong>${esc(data.source.display_name)}</strong> <span class="small resource-id">[${esc(data.source.id)}]</span></p><p class="small muted">Shape: ${esc(data.source.shape_name)}. Only configured values are listed. Save creates a new version; applying it to this DB system requires a separate confirmation.</p><form id="configuration-form"><p>Save as <strong id="configuration-version">${esc(data.suggested_name)}</strong></p><div class="form-grid"><label>Search configured variables<input id="configuration-search" type="search"></label><label>Add HeatWave variable<select id="configuration-add" aria-label="Add HeatWave variable"></select></label></div><div class="table-wrap"><table class="configuration-editor"><thead><tr><th>Variable</th><th>Value</th><th>Action</th></tr></thead><tbody id="configuration-rows"></tbody></table></div><div class="pagination"><span id="configuration-page" class="small muted"></span><div><button type="button" id="configuration-previous">Previous</button><button type="button" id="configuration-next">Next</button></div></div><div id="configuration-removal"></div><p id="configuration-removed" class="small orange"></p>${footer('Review new configuration')}</form><details><summary>Service-managed and initialization values (read-only)</summary>${facts(Object.entries({...data.read_only_variables,...data.initialization_variables}).filter(([,value])=>value!==null))}</details><div class="form-section"><h3>Apply an existing configuration</h3>${select('Configuration for this shape','apply_configuration_id',[['','Select a configuration'],...data.configurations.map(c=>[c.id,c.display_name+' ['+c.id+']'])])}<button type="button" id="configuration-apply" ${mutationsDisabled?'disabled':''}>Review application to DB system</button></div><p class="small muted">Supported variables reference: <a href="${esc(data.catalog_source)}" target="_blank" rel="noopener">Oracle HeatWave</a> (${esc(data.catalog_reviewed)}). OCI validates version and shape-specific limits.</p>`);
+ const form=$('#configuration-form');
+ function control(name,value){
+  const spec=data.catalog[name],attr=`data-config-value="${esc(name)}" aria-label="${esc(name)} value"`;
+  if(spec.type==='enum')return `<select ${attr}>${[...new Set([value,...spec.choices])].map(v=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(v||'(empty)')}</option>`).join('')}</select>`;
+  if(spec.type==='set'){const selected=value?value.split(',').map(v=>v.trim()):[];return `<select ${attr} multiple size="4">${[...new Set([...selected,...spec.choices])].filter(v=>v!=='').map(v=>`<option value="${esc(v)}" ${selected.includes(v)?'selected':''}>${esc(v)}</option>`).join('')}</select><p class="small muted">Select one or more. No selection saves an empty set.</p>`;}
+  if(spec.type==='flags'){const flags=Object.fromEntries(value.split(',').filter(Boolean).map(v=>v.split('=')));return `<details><summary>Edit flags</summary>${[...new Set([...Object.keys(flags),...spec.choices])].map(flag=>`<label>${esc(flag)}<select data-config-flag="${esc(name)}" data-flag="${esc(flag)}" aria-label="${esc(name+' '+flag)}"><option value="">Unspecified</option>${['on','off'].map(v=>`<option ${flags[flag]===v?'selected':''}>${v}</option>`).join('')}</select></label>`).join('')}</details>`;}
+  return `<input ${attr} value="${esc(value)}" type="text" ${['integer','decimal'].includes(spec.type)?'inputmode="decimal"':''}><span class="small muted">${esc(spec.type)}${spec.min!==undefined?' · '+esc(spec.min)+' to '+esc(spec.max):''}</span>`;
+ }
+ function render(){
+  const names=Object.keys(draft).sort().filter(name=>`${name} ${draft[name]}`.toLowerCase().includes(query));
+  const pages=Math.max(1,Math.ceil(names.length/size));page=Math.min(page,pages);
+  $('#configuration-rows').innerHTML=names.slice((page-1)*size,page*size).map(name=>`<tr><th scope="row">${esc(name)}</th><td>${control(name,draft[name])}</td><td><button type="button" data-remove-variable="${esc(name)}" ${data.catalog[name].removable?'':'disabled title="HeatWave requires this variable; edit its value instead"'}>Remove</button></td></tr>`).join('')||'<tr><td colspan="3">No matching configured variables.</td></tr>';
+  $('#configuration-add').innerHTML='<option value="">Select a configurable variable to add</option>'+Object.keys(data.catalog).filter(name=>!(name in draft)).sort().map(name=>`<option>${esc(name)}</option>`).join('');
+  setText('#configuration-page',`${names.length} configured variables · Page ${page} of ${pages}`);setProperty('#configuration-previous','disabled',page===1);setProperty('#configuration-next','disabled',page===pages);
+  setText('#configuration-removed',removed.size?'Omitted from this version: '+[...removed].join(', ')+'. '+data.removal_warning:'');
+ }
+ form.addEventListener('input',e=>{if(e.target.dataset.configValue)draft[e.target.dataset.configValue]=e.target.value;});
+ form.addEventListener('change',e=>{
+  const name=e.target.dataset.configValue;
+  if(name)draft[name]=e.target.multiple?[...e.target.selectedOptions].map(o=>o.value).join(','):e.target.value;
+  const flagged=e.target.dataset.configFlag;
+  if(flagged)draft[flagged]=[...form.querySelectorAll('[data-config-flag]')].filter(el=>el.dataset.configFlag===flagged && el.value).map(el=>el.dataset.flag+'='+el.value).join(',');
+ });
+ $('#configuration-search').addEventListener('input',e=>{query=e.target.value.toLowerCase();page=1;render();});
+ $('#configuration-previous').addEventListener('click',()=>{page--;render();});$('#configuration-next').addEventListener('click',()=>{page++;render();});
+ $('#configuration-add').addEventListener('change',e=>{const name=e.target.value;if(!name)return;draft[name]=data.variables[name]??'';removed.delete(name);query=name;$('#configuration-search').value=name;page=1;render();});
+ form.addEventListener('click',e=>{
+  const name=e.target.closest('[data-remove-variable]')?.dataset.removeVariable;if(!name)return;
+  $('#configuration-removal').innerHTML=`<div class="notice"><strong>Remove ${esc(name)}?</strong><p>${esc(data.removal_warning)}</p><button type="button" id="confirm-variable-removal">Remove from new version</button> <button type="button" id="cancel-variable-removal">Keep variable</button></div>`;
+  $('#cancel-variable-removal').addEventListener('click',()=>$('#configuration-removal').replaceChildren());
+  $('#confirm-variable-removal').addEventListener('click',()=>{delete draft[name];if(name in data.variables)removed.add(name);$('#configuration-removal').replaceChildren();render();});
+ });
+ $('#configuration-apply').addEventListener('click',async()=>{try{const config=$('[name=apply_configuration_id]').value;if(!config)throw Error('Select a configuration to apply');await queued(`/api/db/${encodeURIComponent(id)}/action`,{action:'configuration',configuration_id:config});}catch(error){modalError(error);}});
+ submitForm(async()=>queued(`/api/db/${encodeURIComponent(id)}/configuration-versions`,{source_configuration_id:data.source.id,display_name:data.suggested_name,variables:draft,acknowledge_removal:removed.size>0},result=>configurationSaved(id,result.job_id)));
+ $('#configuration-search').value=query;render();
+}
+async function configurationSaved(dbId,jobId){
+ const compartment=inventory.compartment_id;
+ modal('Saving configuration',`<p id="configuration-save-status">The configuration is being created. You can close this window and find it later in the configuration editor.</p>`);
+ const marker=$('#configuration-save-status');
+ for(let attempt=0;attempt<120;attempt++){
+  if(!marker.isConnected||!$('#modal').open||inventory.compartment_id!==compartment)return;
+  const result=await api('/api/configuration-result/'+encodeURIComponent(jobId));
+  if(result.status==='SUCCEEDED' && result.configuration?.id){
+   const config=result.configuration;
+   modal('Configuration saved',`<p><strong>${esc(config.display_name)}</strong></p><p class="small resource-id">${esc(config.id)}</p><p>Apply this configuration to the selected DB system now? Applying can restart the DB system and interrupt connections.</p><div class="form-footer"><button id="configuration-later">Keep saved · apply later</button><button id="configuration-apply-saved" class="primary">Review application to DB system</button></div>`);
+   $('#configuration-later').addEventListener('click',()=>$('#modal').close());
+   $('#configuration-apply-saved').addEventListener('click',()=>queued(`/api/db/${encodeURIComponent(dbId)}/action`,{action:'configuration',configuration_id:config.id}).catch(modalError));return;
+  }
+  if(!['QUEUED','RUNNING','ACCEPTED','IN_PROGRESS'].includes(result.status)){setText(marker,'Configuration creation '+result.status.toLowerCase()+'. See Activity history for details.');return;}
+  await new Promise(resolve=>setTimeout(resolve,2000));
+ }
+ setText(marker,'Creation is still running. Follow it in Activity history and reopen the configuration editor when complete.');
+}
+
 async function enableHADialog(id) {
  const catalog=await api(`/api/db/${encodeURIComponent(id)}/ha-configurations`);
  const current=catalog.configurations.some(c=>c.id===catalog.current_configuration_id)?catalog.current_configuration_id:'';
@@ -495,6 +574,7 @@ $('#search').addEventListener('input',()=>renderFleet());
 $('#sort-name').addEventListener('click',()=>{descending=!descending;renderFleet();});
 $('#new-deployment').addEventListener('click',()=>createDialog().catch(e=>message(e.message,'red')));
 $('#switchover').addEventListener('click',()=>switchDialog().catch(e=>message(e.message,'red')));
+$('#delete-deployment').addEventListener('click',()=>queued(`/api/deployments/${encodeURIComponent(selected)}/action`,{action:'delete'}).catch(e=>message(e.message,'red')));
 $('#precheck').addEventListener('click',()=>confirmAction('Switchover precheck','Check GTIDs, standalone Green and fresh native replication health.',`/api/deployments/${encodeURIComponent(selected)}/action`,{action:'precheck'}));
 $('#activate-copies').addEventListener('click',()=>confirmAction('Activate copied channels','Enable registered inbound channels on promoted Green and verify health.',`/api/deployments/${encodeURIComponent(selected)}/action`,{action:'activate_copies'}));
 $('#change-compartment').addEventListener('click',async()=>{try{const c=await api('/api/compartments');modal('Change compartment',`<form>${select('Compartment','compartment_id',c.map(x=>[x.id,x.name]),inventory.compartment_id)}<div class="form-footer"><button class="primary">Use compartment</button></div></form>`);submitForm(async f=>{await api('/api/compartment',Object.fromEntries(f));selected=null;inspected=null;systemDetailVersion++;$('#selected').hidden=true;$('#modal').close();await refresh();});}catch(e){message(e.message,'red');}});
@@ -521,6 +601,7 @@ document.addEventListener('click',async e=>{
   }
   if(button.dataset.select)await showDetail(button.dataset.select);
   if(button.dataset.create)await createDialog(button.dataset.create);
+  if(button.dataset.configure)await configurationDialog(button.dataset.configure);
   if(button.dataset.observe)await observerDialog(button.dataset.observe);
   if(button.dataset.events)await manageEvents(button.dataset.events);
   if(button.dataset.work){

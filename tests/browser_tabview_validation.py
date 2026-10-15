@@ -12,6 +12,8 @@ from app import create_app
 from fakes import FakeAuth
 from sqlite_store import Store
 from modules.demo import DemoService,DemoObserver
+from modules.configuration_editor import CATALOG, REMOVAL_WARNING
+from modules.oci_service import OCIService
 
 OUT=Path(os.environ.get('BLUEGREEN_BROWSER_EVIDENCE',str(Path(__file__).resolve().parents[1]/'validation/tabs-update-20261014')));OUT.mkdir(parents=True,exist_ok=True)
 class SyntheticService(DemoService):
@@ -22,6 +24,7 @@ class SyntheticService(DemoService):
             source={'source_type':'IMPORTURL','source_url':'https://sensitive-source-url.invalid/protected-token'},
             backup_policy={'is_enabled':True,'retention_in_days':7,'window_start_time':'01:00'},
             subnet_id='subnet-demo',nsg_ids=['nsg-demo'],maintenance={'window_start_time':'MONDAY 01:00'})
+        for db in self.systems:db['deletion_policy']={'is_delete_protected':db['id']=='demo-blue','automatic_backup_retention':'RETAIN','final_backup':'REQUIRE_FINAL_BACKUP'}
         self.systems.append({**self.systems[2],'id':'demo-eligible','display_name':'Standalone candidate'})
         self.requests=[{'id':f'report-request-{i}','operation_type':f'REPORTING_BACKUP_{i}','status':'SUCCEEDED',
             'percent_complete':100,'time_started':'2026-10-14T12:00:00Z','resources':[{'identifier':'demo-standalone'}]} for i in range(23)]
@@ -34,6 +37,16 @@ class SyntheticService(DemoService):
     def inventory(self,compartment):return {**super().inventory(compartment),'read_replicas':self.replicas,'work_requests':self.requests}
     def read_replicas(self,db_id,compartment):return [r for r in self.replicas if r['db_system_id']==db_id]
     def work_requests(self,compartment):return self.requests
+    def configuration_editor(self,db):
+        return {'source':{'id':db['configuration_id'],'display_name':'MySQL.8.HA','shape_name':'MySQL.8'},
+            'suggested_name':'MySQL.8.HA_v001','variables':{'autocommit':'ON','connect_timeout':'10','replica_type_conversions':'','max_connections':'500'},
+            'read_only_variables':{'mysqlx_enable_hello_notice':'ON'},'initialization_variables':{'lower_case_table_names':0},
+            'catalog':CATALOG['variables'],'catalog_source':CATALOG['source'],'catalog_reviewed':CATALOG['reviewed'],
+            'removal_warning':REMOVAL_WARNING,'configurations':[{'id':'saved-config','display_name':'MySQL.8.HA_v001','shape_name':'MySQL.8'}]}
+    configuration_draft=OCIService.configuration_draft
+    def validate_configuration_apply(self,db,config_id):
+        assert config_id=='saved-config'
+        return {'id':'saved-config','display_name':'MySQL.8.HA_v001'}
 class SyntheticObserver(DemoObserver):
     uptime=1000
     failed_ids=set()
@@ -344,6 +357,7 @@ with tempfile.TemporaryDirectory(prefix='bg-tabs-') as directory:
             check('Three menus and deployment panels fit mobile without horizontal overflow',page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
             page.screenshot(path=str(OUT/'deployment-mobile.png'),full_page=True)
             page.set_viewport_size({'width':1540,'height':1100})
+            check('Switchover enabled while Blue is primary',page.locator('#switchover').is_enabled())
             page.locator('#switchover').click()
             page.get_by_role('heading',name='Switchover · event and promotion choices',exact=True).wait_for()
             ha=page.get_by_label('Promoted HA configuration (optional override)',exact=True)
@@ -390,6 +404,7 @@ with tempfile.TemporaryDirectory(prefix='bg-tabs-') as directory:
             page.route('**/api/deployments/demo-deployment',unavailable)
             page.evaluate('async()=>{try{await showDetail("demo-deployment");}catch(error){}}')
             check('Failed deployment detail request clears both server status panels',all(value=='*****' for value in page.locator('#panels .facts dd').all_text_contents()))
+            check('Failed deployment fetch disables switchover and deletion',page.locator('#switchover').is_disabled() and page.locator('#delete-deployment').is_disabled())
             page.unroute('**/api/deployments/demo-deployment',unavailable);page.evaluate('async()=>{await showDetail("demo-deployment");}')
             check('Deployment values recover after a detail request failure','*****' not in green.locator('#deployment-green-connection').inner_text())
             service.systems[0]['display_name']='Orders · retired'
@@ -397,6 +412,10 @@ with tempfile.TemporaryDirectory(prefix='bg-tabs-') as directory:
             service.dep.update(active_db_system_id='demo-green',switchover_status='SWITCHOVER_COMPLETED')
             page.evaluate('async()=>{await refresh();}')
             check('Renamed servers retain Blue/Green roles by OCID',blue.locator('.server-name.blue').inner_text()=='Orders · retired' and green.locator('.server-name.green').inner_text()=='Orders · production')
+            check('Switchover disabled after Green promotion and name swap',page.locator('#switchover').is_disabled())
+            service.dep.update(switchover_status='NOT_STARTED');page.evaluate('async()=>{await refresh();}')
+            check('Green primary blocks switchover even with an initial status',page.locator('#switchover').is_disabled())
+            service.dep.update(switchover_status='SWITCHOVER_COMPLETED')
             check('Promoted Green remains the current primary after names change','CURRENT PRIMARY' in green.locator('.eyebrow').first.inner_text() and 'CURRENT PRIMARY' not in blue.locator('.eyebrow').first.inner_text())
             green.locator('[data-action="ha_on"]').click()
             page.get_by_role('heading',name='Enable HA · configuration',exact=True).wait_for()
@@ -407,6 +426,67 @@ with tempfile.TemporaryDirectory(prefix='bg-tabs-') as directory:
             page.get_by_role('heading',name='Confirm · Update Orders · production',exact=True).wait_for()
             check('HA confirmation shows the chosen configuration and reuse without change','MySQL.8.HA · demo-config' in page.locator('.operation-changes').inner_text() and 'without resubmitting' in page.locator('.operation-changes').inner_text())
             page.screenshot(path=str(OUT/'ha-dropdown-confirmation.png'))
+            page.get_by_role('button',name='Cancel',exact=True).click();page.get_by_role('button',name='Close',exact=True).click()
+            page.locator('#delete-deployment').click()
+            page.get_by_role('heading',name='Confirm · Delete Blue/Green deployment only',exact=True).wait_for()
+            check('Deployment deletion explicitly retains DB systems and channels','Both DB systems' in page.locator('.operation-changes').inner_text() and 'retained' in page.locator('.operation-changes').inner_text())
+            page.get_by_role('button',name='Cancel',exact=True).click()
+            check('Protected Blue DB cannot be deleted',blue.locator('[data-action=delete]').is_disabled() and blue.locator('[data-action=disable_delete_protection]').is_enabled())
+            check('Active DB exposes Stop but not Start',green.locator('[data-action=stop]').is_enabled() and green.locator('[data-action=start]').is_disabled())
+            green.locator('[data-action=stop]').click()
+            page.get_by_role('heading',name='Confirm · Stop DB system',exact=True).wait_for()
+            check('Stop requires an explicit confirmation with interruption notice','connections and replication are interrupted' in page.locator('.operation-changes').inner_text())
+            page.get_by_role('button',name='Cancel',exact=True).click()
+            green.locator('[data-action=delete]').click()
+            page.get_by_role('heading',name='Confirm · Delete DB system permanently',exact=True).wait_for()
+            check('DB deletion confirmation includes exact identity and backup policy','demo-green' in page.locator('.operation-changes').inner_text() and 'REQUIRE_FINAL_BACKUP' in page.locator('.operation-changes').inner_text())
+            page.get_by_role('button',name='Cancel',exact=True).click()
+            service.systems[1]['lifecycle_state']='INACTIVE';page.evaluate('async()=>{await refresh();}')
+            check('Stopped DB exposes Start and blocks Stop',green.locator('[data-action=start]').is_enabled() and green.locator('[data-action=stop]').is_disabled())
+            service.systems[1]['lifecycle_state']='ACTIVE';page.evaluate('async()=>{await refresh();}')
+            green.locator('[data-action=read_write]').click()
+            page.locator('#conversion-guidance').wait_for()
+            check('Green read-write confirmation offers all conversion options',all(value in page.locator('#conversion-guidance').inner_text() for value in ['ALL_NON_LOSSY','ALL_LOSSY','ALL_SIGNED','ALL_UNSIGNED','Nothing is changed automatically']))
+            page.locator('#review-conversion-configuration').click()
+            page.get_by_role('heading',name='Edit HeatWave configuration',exact=True).wait_for()
+            check('Conversion guidance opens the matching configuration field',page.locator('#configuration-search').input_value()=='replica_type_conversions')
+            page.get_by_role('button',name='Close',exact=True).click()
+            green.locator('[data-configure]').click()
+            page.get_by_role('heading',name='Edit HeatWave configuration',exact=True).wait_for()
+            check('Editor lists configured variables only',page.locator('#configuration-rows tr').count()==4)
+            check('Boolean and set values use dropdowns',page.get_by_label('autocommit value',exact=True).evaluate('(e)=>e.tagName')=='SELECT' and page.get_by_label('replica_type_conversions value',exact=True).get_attribute('multiple') is not None)
+            page.get_by_label('connect_timeout value',exact=True).fill('20')
+            page.get_by_label('autocommit value',exact=True).select_option('OFF')
+            check('Existing values edit in place without removal',page.get_by_label('connect_timeout value',exact=True).input_value()=='20' and page.locator('#configuration-removed').inner_text()=='')
+            page.locator('[data-remove-variable=connect_timeout]').click()
+            check('Removal displays persisted-value warning','does not reset or remove an already persisted value' in page.locator('#configuration-removal').inner_text())
+            page.locator('#cancel-variable-removal').click()
+            check('Cancelling removal preserves the edited value',page.get_by_label('connect_timeout value',exact=True).input_value()=='20')
+            page.locator('[data-remove-variable=connect_timeout]').click();page.locator('#confirm-variable-removal').click()
+            check('Confirmed removal omits optional variable',page.get_by_label('connect_timeout value',exact=True).count()==0 and 'connect_timeout' in page.locator('#configuration-removed').inner_text())
+            check('Required HeatWave variable cannot be removed',page.locator('[data-remove-variable=max_connections]').is_disabled())
+            additions=page.get_by_label('Add HeatWave variable',exact=True)
+            check('Add list excludes arbitrary SQL and initialization variables',additions.locator('option[value=server_uuid]').count()==0 and additions.locator('option').filter(has_text='lower_case_table_names').count()==0)
+            additions.select_option('transaction_isolation')
+            page.get_by_label('transaction_isolation value',exact=True).select_option('READ-COMMITTED')
+            page.locator('#configuration-search').fill('')
+            check('Adding and searching preserves existing edits',page.get_by_label('autocommit value',exact=True).input_value()=='OFF')
+            page.screenshot(path=str(OUT/'configuration-editor.png'))
+            page.get_by_role('button',name='Review new configuration',exact=True).click()
+            page.get_by_role('heading',name='Confirm · Save configuration MySQL.8.HA_v001',exact=True).wait_for()
+            check('Version save confirmation is separate from DB application','Save only; the DB system is unchanged' in page.locator('.operation-changes').inner_text())
+            saved=[]
+            def saved_version(route):
+                saved.append(route.request.post_data_json);route.fulfill(status=202,content_type='application/json',body=json.dumps({'job_id':'saved-job'}))
+            page.route('**/api/db/demo-green/configuration-versions',saved_version)
+            page.route('**/api/configuration-result/saved-job',lambda route:route.fulfill(status=200,content_type='application/json',body=json.dumps({'status':'SUCCEEDED','configuration':{'id':'saved-config','display_name':'MySQL.8.HA_v001'}})))
+            page.locator('#confirm-operation').click()
+            page.get_by_role('heading',name='Configuration saved',exact=True).wait_for()
+            check('Save sends edited values and acknowledged removal with confirmation',saved[0]['variables']['autocommit']=='OFF' and 'connect_timeout' not in saved[0]['variables'] and saved[0]['acknowledge_removal'] and saved[0]['confirmed'] and bool(saved[0]['confirmation_token']))
+            check('Saved version offers Apply or Later',page.locator('#configuration-later').is_visible() and page.locator('#configuration-apply-saved').is_visible())
+            page.locator('#configuration-apply-saved').click()
+            page.get_by_role('heading',name='Confirm · Apply DB configuration',exact=True).wait_for()
+            check('Applying configuration needs a second confirmation','saved-config' in page.locator('.operation-changes').inner_text() and 'restart' in page.locator('.operation-changes').inner_text())
             page.get_by_role('button',name='Cancel',exact=True).click();page.get_by_role('button',name='Close',exact=True).click()
             check('No browser JavaScript errors',not errors)
             browser.close()

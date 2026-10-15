@@ -10,6 +10,7 @@ from .gtid import compare
 from .events import validate_plan
 from .ha_configuration import promotion_configuration
 from .oci_service import public_error, db_update_mode
+from .resource_actions import require_allowed, switchover_blocker
 
 
 class Workflow:
@@ -48,6 +49,36 @@ class Workflow:
                 self.switchover(job, resource, params)
             elif kind == 'precheck':
                 self.step(job, 'Switchover precheck', lambda wait: self.precheck(resource, wait))
+            elif kind in {'start_db', 'stop_db', 'delete_db', 'disable_delete_protection'}:
+                action = params['action']
+                label = {'start': 'Start DB system', 'stop': 'Stop DB system (FAST shutdown)',
+                         'delete': 'Delete DB system permanently',
+                         'disable_delete_protection': 'Disable DB-system deletion protection'}[action]
+                self.step(job, label, lambda wait: wait(self.service.lifecycle_db(
+                    resource, action, expected_compartment=params['compartment_id'],
+                    expected_resource=params['expected_resource'])))
+            elif kind == 'delete_deployment':
+                self.step(job, 'Delete deployment only; retain DB systems and channels', lambda wait: wait(
+                    self.service.delete_deployment(resource, expected_compartment=params['compartment_id'],
+                                                   expected_resource=params['expected_resource'])))
+            elif kind == 'create_configuration':
+                def save_configuration(wait):
+                    response = self.service.create_configuration_version(resource, params)
+                    # Record the resource before waiting, so it remains discoverable
+                    # if its subsequent work request needs attention.
+                    config = oci.util.to_dict(response.data)
+                    result = {k: config.get(k) for k in ['id', 'display_name', 'shape_name', 'compartment_id']}
+                    self.store.put('configuration-result:' + job, result)
+                    wait(response)
+                    return result
+                self.step(job, 'Save new configuration; leave DB unchanged', save_configuration)
+            elif kind == 'apply_configuration':
+                def apply_configuration(wait):
+                    db = self.service.db_system(resource)
+                    self.service._check_lifecycle_review(db, params['compartment_id'], params['expected_resource'])
+                    self.service.validate_configuration_apply(db, params['configuration_id'])
+                    return wait(self.update_db(params, resource, configuration_id=params['configuration_id']))
+                self.step(job, 'Apply configuration to DB system', apply_configuration)
             elif kind == 'update_db':
                 db = self.service.db_system(resource)
                 if db['lifecycle_state'] != 'ACTIVE':
@@ -248,15 +279,7 @@ class Workflow:
 
     def precheck(self, deployment_id, wait):
         deployment = self.service.deployment(deployment_id)
-        state, status = deployment.get('lifecycle_state'), deployment.get('switchover_status')
-        # NOT_STARTED is the normal state after creation. OCI reevaluates
-        # readiness when switchover is submitted; READY is a past observation.
-        if state != 'ACTIVE' or status not in {'NOT_STARTED', 'READY_FOR_SWITCHOVER'}:
-            raise ValueError(f'OCI deployment is {state} / {status}; precheck requires ACTIVE with '
-                             'NOT_STARTED or READY_FOR_SWITCHOVER. Wait for any operation to finish '
-                             'and review failed or completed switchovers before retrying.')
-        if deployment.get('active_db_system_id') != deployment.get('source_db_system_id'):
-            raise ValueError('Blue must still be the active DB system before switchover')
+        require_allowed(switchover_blocker(deployment))
         blue = self.observer.sample(deployment['source_db_system_id'])
         green = self.observer.sample(deployment['target_db_system_id'])
         if green['db_system'].get('is_highly_available'):

@@ -36,7 +36,7 @@ ID_TYPES={'blue':'mysqldbsystem','green':'mysqldbsystem','deployment':'mysqlblue
           'native':'mysqlchannel','inbound':'mysqlchannel','copied':'mysqlchannel','secret':'vaultsecret',
           'new-secret':'vaultsecret','vault':'vault','key':'key','contract-comp':'compartment',
           'contract-tenancy':'tenancy','ha-config':'mysqlconfiguration','green-config':'mysqlconfiguration',
-          'promoted-ha-config':'mysqlconfiguration','denied-comp':'compartment'}
+          'promoted-ha-config':'mysqlconfiguration','denied-comp':'compartment','configuration-version':'mysqlconfiguration'}
 IDS={name:'ocid1.'+kind+'.oc1.'+('' if kind in {'compartment','tenancy'} else 'uk-london-1')+'.'+
      ('a'*48+chr(97+index)*16) for index,(name,kind) in enumerate(ID_TYPES.items())}
 REVERSE={value:key for key,value in IDS.items()}
@@ -118,6 +118,8 @@ class OracleHTTP:
                    'isHighlyAvailable':False,'configurationId':'green-config','shapeName':'MySQL.8','mysqlVersion':'9.5.2',
                    'dataStorageSizeInGBs':200,'ipAddress':'10.0.0.11','port':3306,'databaseMode':'READ_ONLY',
                    'endpoints':[{'ipAddress':'10.0.0.11','hostname':'green.internal','modes':['READ'],'status':'ACTIVE'}]}}
+        for db in self.systems.values():
+            db['deletionPolicy']={'isDeleteProtected':False,'automaticBackupRetention':'RETAIN','finalBackup':'REQUIRE_FINAL_BACKUP'}
         self.channels={'inbound':{'id':'inbound','displayName':'ERP inbound','compartmentId':'contract-comp',
                    'isEnabled':True,'lifecycleState':'ACTIVE','source':{'sourceType':'MYSQL','hostname':'10.0.1.10',
                    'port':3306,'username':'erp','sslMode':'REQUIRED'},'target':{'targetType':'DBSYSTEM',
@@ -212,24 +214,42 @@ class OracleHTTP:
             self.systems['green']['displayName']=old_name
             self.systems['green']['databaseMode']='READ_WRITE';self.channels.pop('native')
             payload=mutation()
-        elif path.endswith('/blueGreenDeployments/deployment'):payload=deepcopy(self.dep)
+        elif path.endswith('/blueGreenDeployments/deployment'):
+            if method=='DELETE':
+                self.dep['lifecycleState']='DELETED';payload=mutation()
+            else:payload=deepcopy(self.dep)
         elif path.endswith('/shapes'):
             payload=deepcopy(self.shapes)
         elif path.endswith('/versions'):
             payload=deepcopy(self.versions)
         elif path.endswith('/configurations'):
-            payload=list(deepcopy(self.configurations).values())
+            if method=='POST':
+                assert body['shapeName']=='MySQL.8'
+                self.configurations['configuration-version']={**deepcopy(body),'id':'configuration-version','type':'CUSTOM','lifecycleState':'ACTIVE'}
+                payload=mutation(deepcopy(self.configurations['configuration-version']))
+            else:payload=list(deepcopy(self.configurations).values())
         elif '/configurations/' in path:
             payload=deepcopy(self.configurations[path.split('/configurations/')[-1]])
         elif path.endswith('/dbSystems'):
             payload=[self.db('blue')]+([self.db('green')] if self.created else [])
+        elif '/dbSystems/' in path and '/actions/' in path:
+            db_id=path.split('/dbSystems/')[-1].split('/')[0]
+            assert method=='POST'
+            if path.endswith('/stop'):assert body=={'shutdownType':'FAST'}
+            self.systems[db_id]['lifecycleState']='INACTIVE' if path.endswith('/stop') else 'ACTIVE'
+            payload=mutation()
         elif '/dbSystems/' in path:
             db_id=path.split('/dbSystems/')[-1]
             if method=='PUT':
                 assert not (body.get('isHighlyAvailable') is True and 'configurationId' in body), 'HA toggle must be separate from a configuration change'
                 assert entry['if_match'] is None
                 assert not any(k in body for k in ['accessMode','adminPassword'])
+                if 'deletionPolicy' in body:
+                    self.systems[db_id]['deletionPolicy'].update(body.pop('deletionPolicy'))
                 self.systems[db_id].update(body);payload=mutation(self.db(db_id))
+            elif method=='DELETE':
+                assert not self.systems[db_id]['deletionPolicy']['isDeleteProtected']
+                self.systems[db_id]['lifecycleState']='DELETED';payload=mutation()
             else:payload=self.db(db_id)
         elif path.endswith('/replicas') and method=='GET':
             if self.replica_denied:

@@ -3,6 +3,8 @@ import re
 from urllib.parse import unquote
 from .oci_service import db_update_mode
 from .ha_configuration import promotion_configuration
+from .resource_actions import (DB_LIFECYCLE_ACTIONS, confirmation_snapshot, db_lifecycle_blocker,
+                               deployment_delete_blocker, require_allowed, switchover_blocker)
 
 
 def build_plan(service, store, compartment, path, params, review):
@@ -84,12 +86,63 @@ def build_plan(service, store, compartment, path, params, review):
         labels={'ha_off':('Disable HA','Convert to standalone'),'ha_on':('Enable HA',params.get('configuration_id')),
                 'read_only':('Set database mode to read-only','Writes will be blocked'),
                 'read_write':('Set database mode to read-write','Allow temporary SQL modifications')}
-        if action=='events':
+        if action in DB_LIFECYCLE_ACTIONS:
+            require_allowed(db_lifecycle_blocker(target,action))
+            plan['confirmation_resource']=confirmation_snapshot(target)
+            resource=name(target)+' ['+target['id']+']'
+            policy=target.get('deletion_policy') or {}
+            if action=='start':
+                plan['title']='Start DB system'
+                add(resource,'Start DB system','Resume service on this DB system; normal service billing resumes.')
+            elif action=='stop':
+                plan['title']='Stop DB system'
+                add(resource,'Stop DB system','FAST shutdown. Database connections and replication are interrupted until the DB system is started again.')
+            elif action=='disable_delete_protection':
+                plan['title']='Disable deletion protection'
+                add(resource,'Disable deletion protection','The DB system becomes eligible for deletion. Its backup deletion policy is preserved. This action does not delete the DB system.')
+            else:
+                plan['title']='Delete DB system permanently'
+                add(resource,'Delete DB system and its data permanently','OCI also removes attached replication channels and other associated DB resources. This action cannot be undone.')
+                add(resource,'Apply existing backup deletion policy','Automatic backups: '+str(policy.get('automatic_backup_retention') or 'OCI current policy')+
+                    '; final backup: '+str(policy.get('final_backup') or 'OCI current policy')+'. Manual backups retain their defined retention period.')
+        elif action=='configuration':
+            config=service.validate_configuration_apply(target,params.get('configuration_id'))
+            plan['confirmation_resource']=confirmation_snapshot(target)
+            plan['title']='Apply DB configuration'
+            add(name(target)+' ['+target['id']+']','Apply '+name(config)+' ['+config['id']+']',
+                'OCI may restart the DB system and interrupt connections. The configuration shape and HA compatibility are checked. '
+                'Omitted variables do not reset already persisted values; inherited/default values may still apply.')
+        elif action=='events':
             plan['title']='Apply scheduled event choices'
             final_events(target['id'],params.get('event_review'))
         elif action=='ha_on':ha_changes(target,params.get('configuration_id'),'Enable HA')
-        elif action in labels:add(name(target),*labels[action])
+        elif action in labels:
+            add(name(target),*labels[action])
+            if action=='read_write':
+                plan['conversion_guidance']={
+                    'db_system_id':target['id'],
+                    'message':'Planning schema changes on Green? Review replica_type_conversions before changing column types or widths while replication continues. Adding an index alone does not require type conversion.',
+                    'options':[
+                        ['Empty set','Keep strict type matching; no attribute promotion or demotion.'],
+                        ['ALL_NON_LOSSY','Allow supported conversions to a type with sufficient range, such as widening an integer.'],
+                        ['ALL_LOSSY','Allow supported narrowing conversions that may truncate data. Use only after reviewing the data impact.'],
+                        ['ALL_SIGNED','Interpret promoted integer values as signed.'],
+                        ['ALL_UNSIGNED','Interpret promoted integer values as unsigned.']],
+                    'note':'Signedness options accompany a conversion mode. Selecting both ALL_SIGNED and ALL_UNSIGNED uses signed values where possible, otherwise unsigned. For INT to BIGINT UNSIGNED, review ALL_NON_LOSSY,ALL_UNSIGNED against your actual values. These settings do not permit arbitrary incompatible schema changes. Nothing is changed automatically.',
+                    'source':'https://dev.mysql.com/doc/refman/9.7/en/replication-features-differing-tables.html#replication-features-attribute-promotion'}
         else:raise ValueError('Unsupported DB action')
+    elif match:=re.fullmatch(r'/api/db/([^/]+)/configuration-versions',path):
+        target=db(unquote(match[1]))
+        editor,submitted,removed=service.configuration_draft(target,params)
+        plan['confirmation_resource']=confirmation_snapshot(target)
+        plan['title']='Save configuration '+editor['suggested_name']
+        add(editor['suggested_name'],'Create a new HeatWave configuration',
+            'Shape: '+target['shape_name']+'. Save only; the DB system is unchanged until a separate Apply confirmation.')
+        for key,value in submitted.items():
+            if value!=editor['variables'].get(key):
+                add(key,'Set configuration variable',value)
+        for key in removed:
+            add(key,'Omit optional variable from new configuration',editor['removal_warning'])
     elif match:=re.fullmatch(r'/api/channels/([^/]+)/action',path):
         target=channel(unquote(match[1]));action=params.get('action');plan['title']='Update replication channel'
         labels={'disable_channel':'Disable replication channel','enable_channel':'Enable replication channel','delete_channel':'Delete replication channel permanently'}
@@ -99,14 +152,25 @@ def build_plan(service, store, compartment, path, params, review):
     elif match:=re.fullmatch(r'/api/deployments/([^/]+)/action',path):
         deployment=service.deployment(unquote(match[1]))
         if deployment['compartment_id']!=compartment:raise ValueError('Choose a deployment in the selected compartment')
-        blue=db(deployment['source_db_system_id']);green=db(deployment['target_db_system_id']);action=params.get('action')
-        if action=='precheck':
+        action=params.get('action')
+        if action=='delete':
+            require_allowed(deployment_delete_blocker(deployment))
+            plan['title']='Delete Blue/Green deployment only'
+            plan['confirmation_resource']=confirmation_snapshot(deployment)
+            add(name(deployment)+' ['+deployment['id']+']','Delete deployment only',
+                'Both DB systems, their data, backups and any existing replication channel are retained. '
+                'A deployment deleted before switchover can no longer be switched over.')
+        else:
+            blue=db(deployment['source_db_system_id']);green=db(deployment['target_db_system_id'])
+        if action=='delete':pass
+        elif action=='precheck':
             plan['title']='Run switchover precheck'
             add(name(deployment),'Request fresh native replication channel status','Generate and monitor the channel-status work request')
             plan['checks']+=['Read Blue/Green GTIDs and server identities.','Check Green standalone mode, channel health and event states. No DB configuration or event changes.']
         elif action=='activate_copies':
             plan['title']='Activate copied channels';copied_channels(green)
         elif action=='switchover':
+            require_allowed(switchover_blocker(deployment))
             plan['title']='Switch over blue-green deployment'
             event_before(blue['id'],params.get('source_event_review'),'switch')
             # Target choices select final states; prechecks require Green events disabled before handoff.

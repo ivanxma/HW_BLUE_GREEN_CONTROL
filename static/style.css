@@ -17,3 +17,5 @@
 .timeline-row{grid-template-columns:10px minmax(0,1fr) auto}.timeline-content{min-width:0}.timeline-step{line-height:1.5;overflow-wrap:anywhere}.timeline-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.timeline-content>details{margin-top:8px}
 
 .sql-table-toolbar{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;margin:16px 0}.sql-table-toolbar label:first-child{flex:1;min-width:150px}.sql-table-toolbar label{margin:0}.sql-table-toolbar select{min-width:80px}.sql-values table{table-layout:fixed;width:100%}.sql-values th:first-child{width:43%}.sql-values th,.sql-values td{white-space:normal;overflow-wrap:anywhere;text-align:left;vertical-align:top}.sql-values tbody th{font-weight:500;text-transform:none;letter-spacing:normal}.sql-values tbody td{font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px}
+
+.lifecycle-controls{border-top:1px solid var(--line);margin-top:14px;padding-top:8px}.lifecycle-controls .actions{flex-wrap:wrap}.danger-action:not(:disabled){color:#a52b2b;border-color:#c98989}.configuration-editor td{vertical-align:top}.configuration-editor input,.configuration-editor select{min-width:140px;max-width:100%}

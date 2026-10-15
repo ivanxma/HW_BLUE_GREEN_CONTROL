@@ -1,6 +1,6 @@
 # Technical guide
 
-[Project overview](../README.md) · [Architecture](architecture/heatwave-control.png) · [Editable diagram](architecture/heatwave-control.drawio)
+[Project overview](../README.md) · [Architecture](architecture/heatwave-control.png) · [Architecture (.drawio)](architecture/heatwave-control.drawio)
 
 This guide describes the prototype's operation and the service behavior reviewed in October 2026. Rehearse with representative data before applying a production change. Native OCI eligibility and readiness checks remain authoritative.
 
@@ -151,6 +151,20 @@ Normal status text is green, active work is orange and failures are red. Blue/Gr
 All operations use **Standard OCI requests**. DB-system updates check fresh ACTIVE state, the selected compartment and unchanged details before submission. Channel updates also check the selected compartment, a settled lifecycle state and unchanged details. Each update is sent once without an atomic version condition or automatic mutation retries. Another client can still change a resource between the check and submission. The confirmation dialog lists changes without an update-mode selector. See [the former ETag behavior, examples and removal rationale](../doc/etag-usage.md).
 
 Run one application worker. Restarting during a workflow marks it interrupted; a timeout/restart does not cancel an OCI request already submitted. Inspect the work request and journal before retrying. Completed changes are retained, with no automatic rollback or replay. Credentials and reports are excluded from Git.
+
+## Lifecycle and configuration changes
+
+Switchover is available only while the deployment is ACTIVE, has not switched over, and its source (Blue) OCID is still the primary. Names can change after promotion; eligibility uses OCIDs. Deleting a deployment removes only that deployment. Both DB systems and existing channels remain. [Oracle deployment management](https://docs.oracle.com/en-us/iaas/mysql-database/doc/managing_a_blue_green_deployment.html).
+
+Each DB system offers Start, Stop and Delete. Stop uses FAST shutdown and requires confirmation. Delete is enabled only after OCI reports deletion protection disabled; disabling protection is a separate confirmed action. The deletion confirmation identifies the DB OCID and its backup policy. Lifecycle confirmations expire after ten minutes and are checked again before execution. These actions use Standard OCI requests and journal their work requests.
+
+**Edit configuration** shows configured values with search and paging. Additions are restricted to documented HeatWave user variables. Enumerations, Boolean values, sets and flags use selections; numeric values retain full precision. Service-managed and initialization values remain read-only. The catalog records its Oracle reference and review date; OCI still checks version and shape-specific constraints.
+
+Save creates the next `[original_name]_v###` configuration in the selected compartment, preserving the verified base configuration and shape. Custom overrides are carried into the new version; the original stays unchanged. After saving, choose **Apply** or **Later**. Apply needs a separate confirmation and validates shape, HA compatibility and initialization values; OCI may restart the DB system. The journal records the new configuration OCID even if subsequent monitoring fails.
+
+Remove an optional variable only after acknowledging that omission does **not** reset a persisted value on an existing DB system; inherited/default values may still apply. Changing its value is preferred. HeatWave-required variables must remain. [Configuration variables](https://docs.oracle.com/en-us/iaas/mysql-database/doc/configuration-variables.html).
+
+The Green read-write confirmation explains `replica_type_conversions` and offers a shortcut to its configuration field. Empty, `ALL_NON_LOSSY`, `ALL_LOSSY`, `ALL_SIGNED` and `ALL_UNSIGNED` are described, including truncation risk and signedness combinations. The notice makes no automatic configuration change. [MySQL conversion rules](https://dev.mysql.com/doc/refman/9.7/en/replication-features-differing-tables.html#replication-features-attribute-promotion).
 
 ## Validation
 

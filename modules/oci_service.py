@@ -7,6 +7,9 @@ import time
 import urllib.request
 
 import oci
+from .resource_actions import (confirmation_snapshot, db_lifecycle_blocker,
+                               deployment_delete_blocker, require_allowed)
+from .configuration_editor import CATALOG, VARIABLES, REMOVAL_WARNING, values, next_name, validate_values
 
 M = oci.mysql.models
 
@@ -88,6 +91,95 @@ class OCIService:
         if config.get('type') != 'DEFAULT' and config.get('compartment_id') != db['compartment_id']:
             raise ValueError('Configuration is outside the selected DB compartment')
         return {key: config.get(key) for key in ['id', 'display_name']}
+
+    def checked_configuration(self, db, configuration_id):
+        config = oci.util.to_dict(self.mysql.get_configuration(configuration_id).data)
+        if config.get('type') != 'DEFAULT' and config.get('compartment_id') != db['compartment_id']:
+            raise ValueError('Custom configuration must belong to the selected DB compartment')
+        if config.get('shape_name') != db.get('shape_name') or config.get('lifecycle_state') != 'ACTIVE':
+            raise ValueError('Choose an ACTIVE configuration matching the DB-system shape')
+        return config
+
+    def configuration_editor(self, db):
+        source = self.checked_configuration(db, db['configuration_id'])
+        chain, seen, current = [], set(), source
+        while current and current['id'] not in seen and len(chain) < 12:
+            chain.append(current)
+            seen.add(current['id'])
+            if current.get('type') == 'DEFAULT':
+                break
+            parent = current.get('parent_configuration_id')
+            current = self.checked_configuration(db, parent) if parent else None
+        if not chain or chain[-1].get('type') != 'DEFAULT':
+            raise ValueError('The base configuration could not be verified; review its parent configuration access')
+        configured, initialization = {}, {}
+        for config in reversed(chain):
+            configured.update(values(config))
+            initialization.update({k: v for k, v in (config.get('init_variables') or {}).items() if v is not None})
+        baseline = values(chain[-1])
+        unknown_overrides = [name for name, value in configured.items() if name not in VARIABLES and value != baseline.get(name)]
+        if unknown_overrides:
+            raise ValueError('Cannot safely copy unrecognized configuration overrides: ' + ', '.join(unknown_overrides))
+        configurations = rows(self.mysql.list_configurations, db['compartment_id'])
+        configurations = [c for c in configurations if c.get('type') == 'DEFAULT' or c.get('compartment_id') == db['compartment_id']]
+        return {'source': {k: source.get(k) for k in ['id', 'display_name', 'shape_name']},
+                'base_configuration_id': chain[-1]['id'],
+                'suggested_name': next_name(source['display_name'], configurations),
+                'variables': {k: v for k, v in configured.items() if k in VARIABLES},
+                'read_only_variables': {k: v for k, v in configured.items() if k not in VARIABLES},
+                'initialization_variables': initialization,
+                'catalog': VARIABLES, 'catalog_source': CATALOG['source'], 'catalog_reviewed': CATALOG['reviewed'],
+                'removal_warning': REMOVAL_WARNING,
+                'configurations': [{k: c.get(k) for k in ['id', 'display_name', 'shape_name']}
+                                   for c in configurations if c.get('shape_name') == db['shape_name'] and c.get('lifecycle_state') == 'ACTIVE']}
+
+    def configuration_draft(self, db, params):
+        editor = self.configuration_editor(db)
+        if params.get('source_configuration_id') != db['configuration_id']:
+            raise ValueError('DB configuration changed; reopen the configuration editor')
+        if params.get('display_name') != editor['suggested_name']:
+            raise ValueError('Configuration version changed; reopen the editor for the next available version')
+        submitted, removed = validate_values(params.get('variables'), editor['variables'], params.get('acknowledge_removal'))
+        return editor, submitted, removed
+
+    def create_configuration_version(self, db_id, params):
+        db = self.db_system(db_id)
+        self._check_lifecycle_review(db, params['compartment_id'], params['expected_resource'])
+        editor, submitted, removed = self.configuration_draft(db, params)
+        if self.db_system(db_id) != db:
+            raise ValueError('DB system changed; reopen the configuration editor')
+        # Derive from the verified default base, not the previous custom version:
+        # omitted optional overrides must not silently be copied from that version.
+        details = M.CreateConfigurationDetails(compartment_id=db['compartment_id'],
+            shape_name=db['shape_name'], display_name=editor['suggested_name'],
+            description='Version of ' + editor['source']['display_name'],
+            parent_configuration_id=editor['base_configuration_id'],
+            init_variables=M.InitializationVariables(**{k: v for k, v in editor['initialization_variables'].items() if v is not None}),
+            options=[M.Option(name=name, value=value) for name, value in sorted(submitted.items())])
+        return self.mysql.create_configuration(details, retry_strategy=oci.retry.NoneRetryStrategy())
+
+    def validate_configuration_apply(self, db, configuration_id):
+        if db.get('lifecycle_state') != 'ACTIVE':
+            raise ValueError('Start the DB system and wait for ACTIVE before applying a configuration')
+        config = self.checked_configuration(db, configuration_id)
+        if db.get('is_highly_available'):
+            self.ha_configuration(db, configuration_id)
+        current = self.checked_configuration(db, db['configuration_id'])
+        def initialization(value):
+            result, seen = {}, set()
+            while value and value['id'] not in seen:
+                seen.add(value['id'])
+                for key, item in (value.get('init_variables') or {}).items():
+                    if item is not None and key not in result:
+                        result[key] = item
+                parent = value.get('parent_configuration_id')
+                value = self.checked_configuration(db, parent) if parent else None
+                if len(seen) > 12:
+                    raise ValueError('Configuration inheritance could not be verified')
+            return result
+        if initialization(config) != initialization(current):
+            raise ValueError('Initialization variables cannot be changed on an existing DB system')
+        return config
 
     def deployment(self, ocid):
         return oci.util.to_dict(self.bg.get_blue_green_deployment(ocid).data)
@@ -364,6 +456,39 @@ class OCIService:
             raise ValueError('DB system details changed before the standard OCI update; refresh and review again')
         return self.db.update_db_system(db_id, M.UpdateDbSystemDetails(**options),
                                         retry_strategy=oci.retry.NoneRetryStrategy())
+
+    def lifecycle_db(self, db_id, action, *, expected_compartment, expected_resource):
+        baseline = self.db_system(db_id)
+        self._check_lifecycle_review(baseline, expected_compartment, expected_resource)
+        require_allowed(db_lifecycle_blocker(baseline, action))
+        if self.db_system(db_id) != baseline:
+            raise ValueError('DB system details changed; refresh and confirm the action again')
+        options = {'retry_strategy': oci.retry.NoneRetryStrategy()}
+        if action == 'start':
+            return self.db.start_db_system(db_id, **options)
+        if action == 'stop':
+            return self.db.stop_db_system(db_id, M.StopDbSystemDetails(shutdown_type='FAST'), **options)
+        if action == 'disable_delete_protection':
+            # Patch only protection, retaining the existing backup deletion plan.
+            policy = M.UpdateDeletionPolicyDetails(is_delete_protected=False)
+            return self.db.update_db_system(db_id, M.UpdateDbSystemDetails(deletion_policy=policy), **options)
+        return self.db.delete_db_system(db_id, **options)
+
+    def delete_deployment(self, deployment_id, *, expected_compartment, expected_resource):
+        baseline = self.deployment(deployment_id)
+        self._check_lifecycle_review(baseline, expected_compartment, expected_resource)
+        require_allowed(deployment_delete_blocker(baseline))
+        if self.deployment(deployment_id) != baseline:
+            raise ValueError('Deployment details changed; refresh and confirm deletion again')
+        # This API removes only the deployment; never delete its member DBs or channels.
+        return self.bg.delete_blue_green_deployment(deployment_id, retry_strategy=oci.retry.NoneRetryStrategy())
+
+    @staticmethod
+    def _check_lifecycle_review(resource, compartment, expected_resource):
+        if not compartment or resource.get('compartment_id') != compartment:
+            raise ValueError('Resource is outside the selected compartment')
+        if not expected_resource or confirmation_snapshot(resource) != expected_resource:
+            raise ValueError('Resource changed since confirmation; refresh and review the action again')
 
     def set_channel(self, channel_id, enabled, *, expected_compartment):
         if not expected_compartment:
