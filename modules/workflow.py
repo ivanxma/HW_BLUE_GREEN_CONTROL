@@ -10,7 +10,7 @@ from .gtid import compare
 from .events import validate_plan
 from .ha_configuration import promotion_configuration
 from .oci_service import public_error, db_update_mode
-from .resource_actions import require_allowed, switchover_blocker
+from .resource_actions import require_allowed, switchover_blocker, confirmation_snapshot
 
 
 class Workflow:
@@ -92,6 +92,19 @@ class Workflow:
                     self.enable_ha(job, resource, params, options.get('configuration_id') or db['configuration_id'], 'Enable HA on DB system')
                 else:
                     self.step(job, 'Update DB system', lambda wait: wait(self.update_db(params, resource, **options)))
+            elif kind == 'refresh_channel_status':
+                def refresh_health(wait):
+                    channel = self.service.channel(resource)
+                    if (channel['compartment_id'] != params['compartment_id'] or
+                            confirmation_snapshot(channel) != params['expected_resource']):
+                        raise ValueError('Channel changed since review; refresh and confirm the action again')
+                    target = self.service.db_system(channel['target']['db_system_id'])
+                    if target['compartment_id'] != params['compartment_id']:
+                        raise ValueError('Choose a target DB system in the selected compartment')
+                    if channel['lifecycle_state'] not in {'ACTIVE', 'INACTIVE'} or target['lifecycle_state'] != 'ACTIVE':
+                        raise ValueError('Wait for a settled channel and ACTIVE target DB system before refreshing health')
+                    return self.service.channel_health(resource, True, wait)
+                self.step(job, 'Generate and read current channel-health snapshot', refresh_health)
             elif kind == 'quarantine_channel':
                 def quarantine(wait):
                     channel = self.service.channel(resource)

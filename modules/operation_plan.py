@@ -145,9 +145,16 @@ def build_plan(service, store, compartment, path, params, review):
             add(key,'Omit optional variable from new configuration',editor['removal_warning'])
     elif match:=re.fullmatch(r'/api/channels/([^/]+)/action',path):
         target=channel(unquote(match[1]));action=params.get('action');plan['title']='Update replication channel'
-        labels={'disable_channel':'Disable replication channel','enable_channel':'Enable replication channel','delete_channel':'Delete replication channel permanently'}
+        labels={'disable_channel':'Disable replication channel','enable_channel':'Enable replication channel','delete_channel':'Delete replication channel permanently',
+                'refresh_channel_status':'Generate current channel-health snapshot'}
         if action not in labels:raise ValueError('Unsupported channel action')
         add(name(target),labels[action],'Target DB system: '+target['target']['db_system_id'])
+        if action=='refresh_channel_status':
+            plan['title']='Refresh channel health'
+            plan['confirmation_resource']=confirmation_snapshot(target)
+            plan['changes'][-1]['detail']+='; creates a diagnostic work request and replaces the health snapshot. No channel, DB configuration, HA or data changes.'
+            plan['checks']+=['Verify the channel and target DB system belong to the selected compartment.',
+                             'Wait for status generation, then read the result. OCI snapshots expire after 12 hours.']
         if action=='enable_channel':add(name(target),'Verify channel health; disable again if unhealthy')
     elif match:=re.fullmatch(r'/api/deployments/([^/]+)/action',path):
         deployment=service.deployment(unquote(match[1]))

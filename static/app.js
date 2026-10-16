@@ -318,8 +318,8 @@ function renderServerDetails(prefix,s,channels,requestKey,filterChannels=false) 
 function channelRows(channels) {
  return channels.filter(c=>c.lifecycle_state!=='DELETED').map(c=>{
   const health=c.health||{},result=health.channel_status_result||{},healthy=result.is_healthy;
-  const information=[c.target?.channel_name,health.time_updated?`Last generated status: ${health.time_updated}`:'',health.error?`Health unavailable: ${health.error}`:'',healthy===false?'Fix or delete this channel':''];
-  return `<div class="channel">${badge(c.is_enabled ? (healthy===true ? 'ACTIVE · HEALTHY' : healthy===false ? 'UNHEALTHY' : 'HEALTH UNKNOWN') : 'DISABLED', healthy===false ? 'red' : c.is_enabled && healthy!==true ? 'orange':'green')} ${esc(c.display_name)}<span class="small muted">${information.filter(Boolean).map(esc).join(' · ')}</span><div class="row-actions"><button data-channel="${esc(c.id)}" data-action="${c.is_enabled ? 'disable_channel':'enable_channel'}" ${mutationsDisabled?'disabled':''}>${c.is_enabled ? 'Disable':'Enable'}</button><button data-channel="${esc(c.id)}" data-action="delete_channel" ${mutationsDisabled?'disabled':''}>Delete</button></div></div>`;
+  const information=[c.target?.channel_name,health.time_updated?`OCI snapshot: ${health.time_updated} (expires after 12 hours)`:'',health.information||'',health.error?`Health unavailable: ${health.error}`:'',healthy===false?'Fix or delete this channel':''];
+  return `<div class="channel">${badge(c.is_enabled ? (healthy===true ? 'ACTIVE · HEALTHY' : healthy===false ? 'UNHEALTHY' : 'HEALTH UNKNOWN') : 'DISABLED', healthy===false ? 'red' : c.is_enabled && healthy!==true ? 'orange':'green')} ${esc(c.display_name)}<span class="small muted">${information.filter(Boolean).map(esc).join(' · ')}</span><div class="row-actions"><button data-channel="${esc(c.id)}" data-action="refresh_channel_status" ${mutationsDisabled||operationBusy()||!['ACTIVE','INACTIVE'].includes(c.lifecycle_state)?'disabled':''}>Refresh health</button><button data-channel="${esc(c.id)}" data-action="${c.is_enabled ? 'disable_channel':'enable_channel'}" ${mutationsDisabled?'disabled':''}>${c.is_enabled ? 'Disable':'Enable'}</button><button data-channel="${esc(c.id)}" data-action="delete_channel" ${mutationsDisabled?'disabled':''}>Delete</button></div></div>`;
  }).join('') || '<span class="muted">None</span>';
 }
 let discoveryMessage=null;
@@ -609,7 +609,11 @@ document.addEventListener('click',async e=>{
    catch(error){modal('Work request status unavailable',`<div class="information"><p>${esc(error.message)}</p><p>This detail request could not verify the OCI status. It does not establish that the deployment operation failed. Check its workflow journal and compartment-specific access.</p></div>`);message(error.message,'orange',{title:'Work-request status unavailable'});}
   }
   if(button.dataset.db){if(button.dataset.action==='ha_on')await enableHADialog(button.dataset.db);else await confirmAction('Update DB system','Apply '+button.dataset.action.replaceAll('_',' ')+' to the selected DB system.',`/api/db/${encodeURIComponent(button.dataset.db)}/action`,{action:button.dataset.action});}
-  if(button.dataset.channel)await confirmAction('Replication channel action',button.dataset.action==='delete_channel'?'Delete this channel permanently?':'Apply '+button.dataset.action.replaceAll('_',' ')+' to this channel.',`/api/channels/${encodeURIComponent(button.dataset.channel)}/action`,{action:button.dataset.action});
+  if(button.dataset.channel){
+   const path=`/api/channels/${encodeURIComponent(button.dataset.channel)}/action`,params={action:button.dataset.action};
+   if(button.dataset.action==='refresh_channel_status')await queued(path,params);
+   else await confirmAction('Replication channel action',button.dataset.action==='delete_channel'?'Delete this channel permanently?':'Apply '+button.dataset.action.replaceAll('_',' ')+' to this channel.',path,params);
+  }
   if(button.hasAttribute('data-all-events'))button.parentElement.querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(c=>c.checked=true);
  }catch(err){if($('#modal').open)modalError(err);else message(err.message,'red');}
 });

@@ -247,7 +247,7 @@ Deleting a deployment does not clean up its retained resources or their charges.
 | --- | --- |
 | Access warning after changing compartments | Check the selected compartment, dynamic-group membership and grants for that compartment. A `404 NotAuthorizedOrNotFound` can mean missing permission or a missing resource; do not assume tenancy-wide access is needed. |
 | `*****` in observed values | Verify the SQL profile, secret access, network route/NSG, port and TLS settings. Wait for a successful SQL check. |
-| Replication health unknown | Inspect the channel and health-check work request; an active lifecycle state alone does not establish replication health. |
+| Replication health unknown | Choose **Replication → Refresh health** and confirm the diagnostic action. It generates a current OCI health snapshot and records the work request, without changing replication or DB configuration. Snapshots expire after 12 hours; absence alone does not establish a fault. If generation is denied, check channel permissions in the selected compartment. [Oracle channel-status behavior](https://docs.oracle.com/en-us/iaas/mysql-database/doc/viewing-replication-channel-status.html). |
 | Precheck fails | Read the failed step: check primary OCID, lifecycle, HA, native channel, other channels, events and unexpected GTIDs. |
 | Diagnostic details unavailable for a work request | Use the actual work-request status. An unavailable diagnostic section does not itself make the operation fail. |
 | Operation fails or is interrupted | Open **Activity history**, record the step and OCI request/work-request IDs, then inspect current OCI state before retrying. Submitted work may still be running. |

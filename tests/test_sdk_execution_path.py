@@ -98,6 +98,7 @@ class OracleHTTP:
     def __init__(self):
         self.calls=[];self.created=False;self.switched=False;self.requests={};self.observer=None
         self.health=True;self.next_failure=False;self.green_ha=False;self.root_denied=False;self.registration_denied=False;self.replica_denied=False
+        self.channel_status_missing=False;self.channel_status_generic_denied=False;self.channel_status_remains_missing=False
         self.replicas=[]
         self.resource_reads=0;self.update_error=None
         self.db_read_changes={};self.channel_read_changes={}
@@ -269,9 +270,15 @@ class OracleHTTP:
             self.channels['copied']={**deepcopy(body),'id':'copied','lifecycleState':'INACTIVE'}
             self.channels['copied']['source'].pop('password')
             payload=mutation(deepcopy(self.channels['copied']))
-        elif '/channels/' in path and path.endswith('/actions/generateChannelStatus'):payload=mutation()
+        elif '/channels/' in path and path.endswith('/actions/generateChannelStatus'):
+            self.channel_status_missing=self.channel_status_remains_missing
+            payload=mutation()
         elif '/channels/' in path and path.endswith('/channelStatus'):
-            payload={'timeUpdated':'2026-10-14T12:00:00Z','channelStatusResult':{'isHealthy':self.health,'isReceivedGtidSetApplied':True,'errors':[],'lagDuration':'PT0S'}}
+            if self.channel_status_missing or self.channel_status_generic_denied:
+                message='Not authorized or resource not found' if self.channel_status_generic_denied else 'Channel status for Channel example-channel was not found.'
+                payload={'code':'NotAuthorizedOrNotFound','message':message};status_code=404
+            else:
+                payload={'timeUpdated':'2026-10-14T12:00:00Z','channelStatusResult':{'isHealthy':self.health,'isReceivedGtidSetApplied':True,'errors':[],'lagDuration':'PT0S'}}
         elif '/channels/' in path:
             channel_id=path.split('/channels/')[-1]
             if method=='PUT':

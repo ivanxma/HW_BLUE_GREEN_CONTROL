@@ -292,11 +292,27 @@ class OCIService:
 
     def channel_health(self, ocid, refresh=False, wait=None):
         if refresh:
-            response = self.ch.generate_channel_status(ocid)
+            response = self.ch.generate_channel_status(ocid, retry_strategy=oci.retry.NoneRetryStrategy())
             if wait:
                 wait(response)
-        data = oci.util.to_dict(self.ch.get_channel_status(ocid).data)
-        return data
+            else:
+                self.wait(response, lambda request_id: None)
+        try:
+            return oci.util.to_dict(self.ch.get_channel_status(ocid).data)
+        except oci.exceptions.ServiceError as exc:
+            if refresh or exc.status != 404:
+                raise
+            # Status is a separately generated, expiring snapshot. Reading the
+            # channel successfully does not imply that this snapshot exists.
+            missing = bool(re.fullmatch(r'Channel status for Channel .+ was not found\.', exc.message or ''))
+            return {'snapshot_state': 'UNAVAILABLE', 'snapshot_missing': missing,
+                    'information': ('OCI channel-health snapshot is missing or expired. Snapshots expire after 12 hours. '
+                                    'Choose Refresh health to generate a current snapshot; this does not change replication.'
+                                    if missing else
+                                    'No readable OCI channel-health snapshot. It may be missing, expired after 12 hours, '
+                                    'or outside this principal\'s access. Choose Refresh health; if access is denied, '
+                                    'review mysql-channels permissions in this selected compartment.'),
+                    'diagnostic_error': public_error(exc)}
 
     def list_deployments(self, compartment):
         # Registration visibility is deliberately confined to the selected

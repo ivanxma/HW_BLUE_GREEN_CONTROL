@@ -722,7 +722,12 @@ def create_app(config=None, service=None, observer=None, store=None, auth=None):
         if channel['compartment_id'] != compartment():
             raise ValueError('Choose a channel in the selected compartment')
         scoped_db(channel['target']['db_system_id'])
-        action = request.get_json().get('action')
+        value = request.get_json()
+        action = value.get('action')
+        if action == 'refresh_channel_status':
+            expected = confirmed_resource(value, channel)
+            return jsonify(job_id=workflow.submit(action, channel_id, {
+                'compartment_id':compartment(), 'expected_resource':expected})), 202
         if action not in {'disable_channel', 'enable_channel', 'delete_channel'}:
             raise ValueError('Unsupported channel action')
         return jsonify(job_id=workflow.submit(action, channel_id, {'compartment_id':compartment()})), 202
