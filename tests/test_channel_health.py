@@ -22,7 +22,7 @@ def test_missing_health_snapshot_is_informational_and_polling_never_generates(ha
         health=channels[0]['health']
         assert health['snapshot_state']=='UNAVAILABLE'
         assert health['snapshot_missing'] is (not generic)
-        assert '12 hours' in health['information'] and 'Refresh health' in health['information']
+        assert '12 hours' in health['information'] and 'Refresh snapshot' in health['information']
         assert '404' in health['diagnostic_error']
         assert 'error' not in health and 'channel_status_result' not in health
         if generic:assert 'selected compartment' in health['information']

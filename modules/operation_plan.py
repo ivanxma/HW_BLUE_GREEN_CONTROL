@@ -150,7 +150,7 @@ def build_plan(service, store, compartment, path, params, review):
         if action not in labels:raise ValueError('Unsupported channel action')
         add(name(target),labels[action],'Target DB system: '+target['target']['db_system_id'])
         if action=='refresh_channel_status':
-            plan['title']='Refresh channel health'
+            plan['title']='Refresh channel-health snapshot'
             plan['confirmation_resource']=confirmation_snapshot(target)
             plan['changes'][-1]['detail']+='; creates a diagnostic work request and replaces the health snapshot. No channel, DB configuration, HA or data changes.'
             plan['checks']+=['Verify the channel and target DB system belong to the selected compartment.',

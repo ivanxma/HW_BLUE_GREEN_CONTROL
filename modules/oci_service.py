@@ -307,10 +307,10 @@ class OCIService:
             missing = bool(re.fullmatch(r'Channel status for Channel .+ was not found\.', exc.message or ''))
             return {'snapshot_state': 'UNAVAILABLE', 'snapshot_missing': missing,
                     'information': ('OCI channel-health snapshot is missing or expired. Snapshots expire after 12 hours. '
-                                    'Choose Refresh health to generate a current snapshot; this does not change replication.'
+                                    'Choose Refresh snapshot to generate a current snapshot; this does not change replication.'
                                     if missing else
                                     'No readable OCI channel-health snapshot. It may be missing, expired after 12 hours, '
-                                    'or outside this principal\'s access. Choose Refresh health; if access is denied, '
+                                    'or outside this principal\'s access. Choose Refresh snapshot; if access is denied, '
                                     'review mysql-channels permissions in this selected compartment.'),
                     'diagnostic_error': public_error(exc)}
 
