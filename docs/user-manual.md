@@ -140,6 +140,8 @@ The administration VM reaches the DB endpoints privately. Green initiates its re
 
 All DB states except deleted are shown by default. Search and filter by DB state, channel state or read-replica presence. Deleted DB systems, channels and deployments are hidden. A server with read replicas, or already belonging to a deployment, is excluded from new creation.
 
+If **Create environment** is disabled, the explanation below it identifies any active operation and unavailable source DB systems. Expand **Source DB system eligibility** for each server's reasons. Creation requires an eligible ACTIVE source and no active application operation; the button updates automatically as these conditions change.
+
 ![DB inventory on the left and selected-server detail tabs on the right](manual/db-systems.png)
 
 *Select the paired Blue or Green name above the details to switch to that server.*

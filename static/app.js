@@ -275,6 +275,24 @@ function resetFailedReadout(root){root?.querySelectorAll('[data-observation-erro
 let inspected=null,systemDetailVersion=0;
 const systemRequests=new Map();
 function operationBusy(){return inventory?.history.some(j=>['QUEUED','ACCEPTED','RUNNING','IN_PROGRESS'].includes(j.status));}
+function renderCreationAvailability(activeJobs=[],error=''){
+ const reasons=[];
+ if(mutationsDisabled)reasons.push(demo?'Creation is disabled in demo mode.':'Creation is disabled in read-only validation mode.');
+ let blockedSources=[];
+ if(error)reasons.push(error);
+ else if(inventory){
+  if(activeJobs.length)reasons.push(`Wait for the current operation to finish: ${activeJobs.map(j=>`${j.kind.replaceAll('_',' ')} (${j.status.toLowerCase()})`).join(', ')}.`);
+  if(!inventory.systems.some(s=>s.eligible)){
+   reasons.push(inventory.systems.length?'No eligible source DB system in the selected compartment.':inventory.db_scope_verified===false?'DB-system discovery could not be verified. Review access for the selected compartment.':'No DB systems found in the selected compartment.');
+   blockedSources=inventory.systems;
+  }
+ }
+ const blocked=reasons.length>0;
+ setProperty('#new-deployment','disabled',blocked);
+ setProperty('#new-deployment','title',blocked?reasons.join(' '):'Create an environment from an eligible source DB system');
+ setProperty('#creation-availability','hidden',!blocked);
+ setHTML('#creation-availability',blocked?`<strong>Creation unavailable</strong>${reasons.map(reason=>`<p>${esc(reason)}</p>`).join('')}${blockedSources.length?`<details data-detail-key="creation-sources"><summary>Source DB system eligibility</summary><ul>${blockedSources.slice(0,10).map(s=>`<li><strong>${esc(s.display_name)}</strong> · ${esc(s.lifecycle_state)}: ${(s.creation_blockers||['Eligibility could not be verified']).map(esc).join('; ')}</li>`).join('')}</ul><p>${blockedSources.length>10?`${blockedSources.length-10} additional DB systems. `:''}Review individual requirements in DB Systems.</p></details>`:''}`:'');
+}
 function lifecycleControls(s){
  const d=s.db_system,actions=s.lifecycle_actions||{},protection=d.deletion_policy?.is_delete_protected;
  const labels=[['start','Start'],['stop','Stop'],...(protection===true?[['disable_delete_protection','Disable deletion protection']]:[]),['delete','Delete DB system']];
@@ -328,6 +346,8 @@ async function refresh() {
  if(refreshing)return; refreshing=true;
  try {
   inventory=await api('/api/dashboard');
+  const activeJobs=inventory.history.filter(j=>['QUEUED','ACCEPTED','RUNNING','IN_PROGRESS'].includes(j.status));
+  renderCreationAvailability(activeJobs);
   const warnings=[inventory.access_warning||inventory.registration_warning,inventory.replica_warning && !inventory.access_warning?inventory.replica_warning:null].filter(Boolean);
   if(warnings.length && currentNotification.color!=='red' && !inventory.history.some(j=>j.status==='RUNNING'))message(warnings.join(' ')+' New creation is disabled until discovery is verified.','orange',{title:'Compartment discovery warning',category:'discovery'});
   else if(!warnings.length && discoveryMessage && currentNotification.category==='discovery')message('No operation in progress.','green',{title:'Ready',category:'idle'});
@@ -347,17 +367,15 @@ async function refresh() {
   setText('#ha-count',inventory.systems.filter(s=>s.is_highly_available).length);
   const previousSystem=inspected;renderFleet();
   if(inspected && previousSystem===inspected)await showSystem(inspected);
-  const activeJobs=inventory.history.filter(j=>['QUEUED','ACCEPTED','RUNNING','IN_PROGRESS'].includes(j.status));
   const latest=[...inventory.history].sort((a,b)=>b.started-a.started).slice(0,1);
   setHTML('#active-jobs',renderJobs(activeJobs.length?activeJobs:latest));
   setHTML('#history-list',renderJobs(inventory.history));
   syncWorkflowNotification(inventory.history);
-  setProperty('#new-deployment','disabled',mutationsDisabled||!inventory.systems.some(s=>s.eligible)||activeJobs.length>0);
 
   if(selected && inventory.registration_scope_verified!==false && !inventory.deployments.some(d=>d.id===selected && d.lifecycle_state!=='DELETED')){selected=null;detailData=null;setProperty('#selected','hidden',true);disableDeploymentActions('Deployment is no longer available.');}
   if(selected)await showDetail(selected);
   stampChanges(previous);
- } catch(e){disableDeploymentActions('Current deployment state could not be verified.');clearLiveReadout($('#system-detail'),e.message);clearLiveReadout($('#panels'),e.message);message(e.message,'red');} finally{refreshing=false;}
+ } catch(e){renderCreationAvailability([],'Current inventory could not be verified. Refresh the dashboard before creating an environment.');disableDeploymentActions('Current deployment state could not be verified.');clearLiveReadout($('#system-detail'),e.message);clearLiveReadout($('#panels'),e.message);message(e.message,'red');} finally{refreshing=false;}
 }
 let deploymentPanelKey=null;
 async function showDetail(id) {
